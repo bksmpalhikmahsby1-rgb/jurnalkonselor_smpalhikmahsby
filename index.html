@@ -3895,6 +3895,20 @@ function exportLaporanLengkapPDF(){
   const kelasInfo = laporanKelasLabel();
   const personalBKInfo = laporanPersonalBKLabel();
 
+  const stampRahasiaBox = ()=>{
+    const boxW = 130, boxH = 22;
+    const boxX = pw - 40 - boxW;
+    const boxY = 14;
+    doc.setDrawColor(168,50,50);
+    doc.setLineWidth(1.6);
+    doc.rect(boxX, boxY, boxW, boxH);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.setTextColor(168,50,50);
+    doc.text('SANGAT RAHASIA', boxX + boxW/2, boxY + boxH/2 + 4, {align:'center'});
+    doc.setLineWidth(1);
+  };
+
   try{ doc.addImage(LOGO_ICON, 'PNG', pw/2-40, ph/2-180, 80, 80); }catch(e){}
   doc.setFont('helvetica','bold'); doc.setFontSize(22); doc.setTextColor(10,46,42);
   doc.text('LAPORAN KINERJA', pw/2, ph/2-70, {align:'center'});
@@ -3907,6 +3921,7 @@ function exportLaporanLengkapPDF(){
   doc.text(periode, pw/2, ph/2+52, {align:'center'});
   doc.text(kelasInfo, pw/2, ph/2+70, {align:'center'});
   doc.text('Dicetak: ' + fmtDateID(todayISO()), pw/2, ph/2+88, {align:'center'});
+  stampRahasiaBox();
 
   // ===== Halaman Pembuka: Bismillah, salam, narasi pembuka laporan =====
   const marginX = 60;
@@ -3914,6 +3929,7 @@ function exportLaporanLengkapPDF(){
   doc.addPage();
   doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(10,46,42);
   doc.text('Bismillahirrohmanirrohim', pw/2, 110, {align:'center'});
+  stampRahasiaBox();
 
   doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
   doc.text("Assalamu'alaikum warahmatullahi wabarakatuh.", marginX, 150);
@@ -3931,6 +3947,7 @@ function exportLaporanLengkapPDF(){
 
   doc.addPage();
   let y = pdfHeader(doc, 'Daftar Isi Laporan', tahunAjaran + '  |  ' + personalBKInfo + '  |  ' + periode + '  |  ' + kelasInfo);
+  stampRahasiaBox();
   doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
   y += 20;
   sections.forEach((s,i)=>{
@@ -3947,7 +3964,8 @@ function exportLaporanLengkapPDF(){
       body: s.rows.map((r,i)=>s.body(r,i)),
       startY: sy+8, styles:{fontSize:8, cellPadding:4, valign:'top'},
       headStyles:{fillColor:[13,59,54], textColor:255},
-      margin:{left:30,right:30}
+      margin:{left:30,right:30},
+      didDrawPage: stampRahasiaBox
     });
   });
 
@@ -3959,6 +3977,7 @@ function exportLaporanLengkapPDF(){
   doc.addPage();
   doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
   let cy = 70;
+  stampRahasiaBox();
   const closingParas = [
     'Demikian Laporan Kinerja Bimbingan dan Konseling ini kami susun sebagai bentuk pertanggungjawaban dan evaluasi pelaksanaan program Bimbingan dan Konseling di SMP Al Hikmah Full Day School Surabaya.',
     'Semoga laporan ini dapat menjadi bahan pertimbangan dan tindak lanjut yang bermanfaat demi peningkatan mutu layanan bimbingan dan konseling bagi peserta didik di masa yang akan datang. Atas perhatian dan kerja sama yang baik, kami ucapkan terima kasih.'
