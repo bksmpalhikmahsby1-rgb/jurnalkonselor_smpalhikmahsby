@@ -470,10 +470,20 @@ async function loadStudents(){
     if(DB.settings.namaWakaKesiswaan === undefined){ DB.settings.namaWakaKesiswaan = ''; settingsChanged = true; }
     if(DB.settings.analisisPasswordHash === undefined){ DB.settings.analisisPasswordHash = ''; settingsChanged = true; }
     if(DB.settings.namaKanitBK === undefined){ DB.settings.namaKanitBK = ''; settingsChanged = true; }
-    const isFreshInstall = DB.settings.activePersonalBKId === undefined;
     if(DB.settings.kanitBKId === undefined){ DB.settings.kanitBKId = ''; settingsChanged = true; }
     if(DB.settings.adminBKId === undefined){
-      DB.settings.adminBKId = isFreshInstall ? 'pbk_seed_1' : '';
+      // Field ini baru pernah ada -> tetapkan Erwin (pbk_seed_1) sebagai Admin BK pertama secara default,
+      // baik untuk instalasi baru maupun aplikasi yang sudah lama dipakai sebelum fitur ini ada.
+      // Kalau field ini SUDAH pernah diisi sebelumnya (termasuk sengaja dikosongkan lewat "Lepas Admin BK"),
+      // baris ini TIDAK akan pernah dijalankan lagi.
+      DB.settings.adminBKId = 'pbk_seed_1';
+      settingsChanged = true;
+    } else if(!DB.settings.adminBKId && !DB.settings.kanitBKId){
+      // Perbaikan otomatis: Admin BK maupun Kanit BK SAMA-SAMA masih kosong (sistem peran belum
+      // pernah benar-benar dipakai sama sekali) -> kemungkinan besar akibat migrasi versi sebelumnya
+      // yang keliru. Tetapkan Erwin (pbk_seed_1) sebagai Admin BK agar tidak ada yang terkunci total.
+      // Perbaikan ini TIDAK akan berjalan lagi begitu salah satu peran pernah benar-benar ditetapkan.
+      DB.settings.adminBKId = 'pbk_seed_1';
       settingsChanged = true;
     }
     if(DB.settings.activePersonalBKId === undefined){
