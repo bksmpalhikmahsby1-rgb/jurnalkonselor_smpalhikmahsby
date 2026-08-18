@@ -672,15 +672,11 @@ const STATE = {
   unservedSearchQ: '',
   unservedExpandedClasses: {},
   analisisExpandedIds: {},
-  analisisUnlocked: false,
-  analisisMathChallenge: null,
-  editingKanitBKPairing: false,
   personalBKAuthTarget: null,
   personalBKAuthenticated: false,
   kelolaKelasEditIds: {},
   personalBKAuthMode: null,
   personalBKAuthMathChallenge: null,
-  analisisSetupSelectedKanit: null,
   filterKelas: '',
   layananFilterJenis: '',
   kasusFilterJenis: '',
@@ -742,6 +738,10 @@ async function init(){
         toast('Halaman ini hanya bisa diakses oleh Admin BK', true);
         return;
       }
+      if(btn.dataset.nav === 'analisis' && !isCurrentUserKanitBK()){
+        toast('Halaman ini hanya bisa diakses oleh Kanit BK', true);
+        return;
+      }
       STATE.view = btn.dataset.nav;
       STATE.currentInduk = null;
       render();
@@ -766,6 +766,11 @@ function isCurrentUserAdminBK(){
   if(!isPersonalBKFullyAuthenticated()) return false;
   if(!DB.settings.adminBKId) return true; // belum ada Admin BK ditetapkan -> boleh masuk untuk menetapkan yang pertama
   return DB.settings.activePersonalBKId === DB.settings.adminBKId;
+}
+function isCurrentUserKanitBK(){
+  if(!isPersonalBKFullyAuthenticated()) return false;
+  if(!DB.settings.kanitBKId) return false; // belum ada Kanit BK ditetapkan sama sekali oleh Admin BK
+  return DB.settings.activePersonalBKId === DB.settings.kanitBKId;
 }
 
 function activePersonalBK(){
@@ -1122,7 +1127,6 @@ async function selectPersonalBK(id){
   DB.settings.activePersonalBKId = id;
   DB.settings.lastGuru = p.nama;
   await sSet('settings', DB.settings);
-  STATE.analisisUnlocked = false;
   const hasTugas = (p.kelasTugas||[]).length > 0;
   if(hasTugas){
     STATE.view = 'beranda';
@@ -1348,6 +1352,10 @@ function setActiveNav(){
   const navPengontrol = document.getElementById('navPengontrol');
   if(navPengontrol){
     navPengontrol.style.display = isCurrentUserAdminBK() ? '' : 'none';
+  }
+  const navAnalisis = document.querySelector('.topbar nav button[data-nav="analisis"]');
+  if(navAnalisis){
+    navAnalisis.style.display = isCurrentUserKanitBK() ? '' : 'none';
   }
 }
 
@@ -3498,11 +3506,6 @@ document.addEventListener('change', (e)=>{
     STATE.unservedFilterKelas = e.target.value;
     updateUnservedSection();
   }
-  if(e.target.id === 'analisisSetupKanitSelect'){
-    STATE.analisisSetupSelectedKanit = e.target.value;
-    STATE.analisisMathChallenge = null;
-    render();
-  }
   if(e.target.id === 'namaKepalaSekolahInput'){
     DB.settings.namaKepalaSekolah = e.target.value.trim();
     sSet('settings', DB.settings);
@@ -4411,18 +4414,6 @@ async function startNewAcademicYear(){
 }
 
 /* ================== HALAMAN: ANALISIS DATA JURNAL KONSELOR ================== */
-/* ================== GERBANG KATA SANDI: ANALISIS DATA JURNAL KONSELOR ================== */
-function buildKanitBKSelectHtml(selectedId, elementId){
-  elementId = elementId || 'analisisKanitBKSelect';
-  const options = (DB.personalBK||[]).map(p=>`<option value="${p.id}" ${selectedId===p.id?'selected':''}>${esc(p.nama)}</option>`).join('');
-  return `
-    <select id="${elementId}">
-      <option value="">&mdash; Belum Dipilih &mdash;</option>
-      ${options}
-    </select>
-  `;
-}
-
 function simpleHash(str){
   let hash = 5381;
   for(let i=0;i<str.length;i++){
@@ -4431,212 +4422,20 @@ function simpleHash(str){
   }
   return (hash >>> 0).toString(16);
 }
-function generateAnalisisMathChallenge(){
-  const a = Math.floor(Math.random()*10)+1;
-  const b = Math.floor(Math.random()*10)+1;
-  STATE.analisisMathChallenge = { a, b, answer: a+b };
-}
-
-function renderAnalisisSetupPassword(){
-  const selectedId = (STATE.analisisSetupSelectedKanit !== null && STATE.analisisSetupSelectedKanit !== undefined) ? STATE.analisisSetupSelectedKanit : (DB.settings.kanitBKId || '');
-  const selectedP = (DB.personalBK||[]).find(p=>p.id===selectedId);
-  const hasOwnPassword = !!(selectedP && selectedP.passwordHash);
-  if(!STATE.analisisMathChallenge) generateAnalisisMathChallenge();
-  const c = STATE.analisisMathChallenge;
-  return `
-    <div class="pagehead">
-      <div>
-        <div class="crumbs">Analisis &amp; Evaluasi</div>
-        <h1>Analisis Data Jurnal Konselor</h1>
-      </div>
-    </div>
-    <div class="card" style="max-width:480px;margin:30px auto;">
-      <h2>&#128274; ${hasOwnPassword ? 'Masuk dengan Kata Sandi Pribadi Kanit BK' : 'Buat Kata Sandi Halaman Ini'}</h2>
-      <p class="hint" style="margin-top:-6px;">Halaman Analisis Data Jurnal Konselor bersifat rahasia untuk supervisi pimpinan (Kanit BK / Kepala Sekolah / Wakil Kepala Kesiswaan).</p>
-      <div class="field">
-        <label>Kanit BK (pilih dari Personal BK yang bertugas)</label>
-        ${buildKanitBKSelectHtml(selectedId, 'analisisSetupKanitSelect')}
-      </div>
-      ${hasOwnPassword ? `
-      <div class="hint" style="margin-bottom:10px;">${esc(selectedP.nama)} sudah memiliki kata sandi pribadi. Masukkan kata sandi tersebut untuk sekaligus menjadikannya kata sandi halaman ini &mdash; tidak perlu membuat kata sandi baru.</div>
-      <div class="field">
-        <label>Kata Sandi ${esc(selectedP.nama)}</label>
-        <input type="password" id="analisisExistingPwInput" placeholder="Masukkan kata sandi" autocomplete="current-password">
-      </div>
-      <div class="field">
-        <label>Verifikasi: berapa hasil dari ${c.a} + ${c.b}?</label>
-        <input type="number" id="analisisMathInput" placeholder="Jawaban">
-      </div>
-      <div class="btnrow">
-        <button class="btn btn-primary" onclick="submitAnalisisUseExistingPassword()">Masuk</button>
-      </div>
-      ` : `
-      <div class="field">
-        <label>Kata Sandi Baru</label>
-        <input type="password" id="analisisNewPassword" placeholder="Minimal 4 karakter" autocomplete="new-password">
-      </div>
-      <div class="field">
-        <label>Ulangi Kata Sandi</label>
-        <input type="password" id="analisisNewPasswordConfirm" placeholder="Ketik ulang kata sandi" autocomplete="new-password">
-      </div>
-      <div class="btnrow">
-        <button class="btn btn-gold" onclick="submitAnalisisSetupPassword()">Simpan Kata Sandi &amp; Masuk</button>
-      </div>
-      `}
-    </div>
-  `;
-}
-async function submitAnalisisSetupPassword(){
-  const pw = document.getElementById('analisisNewPassword').value;
-  const pw2 = document.getElementById('analisisNewPasswordConfirm').value;
-  const kanitId = document.getElementById('analisisSetupKanitSelect').value;
-  if(!pw || pw.length<4){ toast('Kata sandi minimal 4 karakter', true); return; }
-  if(pw !== pw2){ toast('Konfirmasi kata sandi tidak cocok', true); return; }
-  const kanitP = (DB.personalBK||[]).find(p=>p.id===kanitId);
-  const hash = simpleHash(pw);
-  if(kanitP){
-    kanitP.passwordHash = hash;
-    await savePersonalBK();
-    DB.settings.kanitBKId = kanitId;
-    DB.settings.namaKanitBK = kanitP.nama;
-  } else {
-    DB.settings.analisisPasswordHash = hash;
-  }
-  await sSet('settings', DB.settings);
-  STATE.analisisUnlocked = true;
-  STATE.analisisSetupSelectedKanit = null;
-  toast('Kata sandi berhasil dibuat');
-  render();
-}
-async function submitAnalisisUseExistingPassword(){
-  const selectedId = STATE.analisisSetupSelectedKanit || DB.settings.kanitBKId;
-  const p = (DB.personalBK||[]).find(x=>x.id===selectedId);
-  const pw = document.getElementById('analisisExistingPwInput').value;
-  const ans = document.getElementById('analisisMathInput').value;
-  const c = STATE.analisisMathChallenge;
-  if(!ans || String(ans).trim() !== String(c.answer)){
-    toast('Jawaban verifikasi salah, silakan coba lagi', true);
-    STATE.analisisMathChallenge = null;
-    render();
-    return;
-  }
-  if(!p || simpleHash(pw) !== p.passwordHash){
-    toast('Kata sandi salah', true);
-    STATE.analisisMathChallenge = null;
-    render();
-    return;
-  }
-  DB.settings.kanitBKId = selectedId;
-  DB.settings.namaKanitBK = p.nama;
-  await sSet('settings', DB.settings);
-  STATE.analisisUnlocked = true;
-  STATE.analisisMathChallenge = null;
-  STATE.analisisSetupSelectedKanit = null;
-  toast('Berhasil masuk menggunakan kata sandi pribadi ' + p.nama);
-  render();
-}
-
-function renderAnalisisLoginGate(){
-  if(!STATE.analisisMathChallenge) generateAnalisisMathChallenge();
-  const c = STATE.analisisMathChallenge;
-  const kanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  return `
-    <div class="pagehead">
-      <div>
-        <div class="crumbs">Analisis &amp; Evaluasi</div>
-        <h1>Analisis Data Jurnal Konselor</h1>
-      </div>
-    </div>
-    <div class="card" style="max-width:480px;margin:30px auto;">
-      <h2>&#128274; Masuk ke Analisis Data Jurnal Konselor</h2>
-      <p class="hint" style="margin-top:-6px;">Halaman ini dilindungi kata sandi khusus untuk supervisi pimpinan.</p>
-      <div class="field">
-        <label>Nama Kanit BK</label>
-        <input type="text" value="${esc(kanitP ? kanitP.nama : (DB.settings.namaKanitBK||'-'))}" disabled>
-      </div>
-      <div class="field">
-        <label>Kata Sandi</label>
-        <input type="password" id="analisisPasswordInput" placeholder="Masukkan kata sandi" autocomplete="current-password">
-      </div>
-      <div class="field">
-        <label>Verifikasi: berapa hasil dari ${c.a} + ${c.b}?</label>
-        <input type="number" id="analisisMathInput" placeholder="Jawaban">
-      </div>
-      <div class="btnrow">
-        <button class="btn btn-primary" onclick="submitAnalisisLogin()">Masuk</button>
-      </div>
-      <p class="hint" style="margin-top:12px;">Lupa kata sandi? Kata sandi dapat direset melalui halaman "Pengontrol Sistem Kata Sandi" (khusus Admin BK).</p>
-    </div>
-  `;
-}
-async function submitAnalisisLogin(){
-  const pw = document.getElementById('analisisPasswordInput').value;
-  const ans = document.getElementById('analisisMathInput').value;
-  const c = STATE.analisisMathChallenge;
-  if(!ans || String(ans).trim() !== String(c.answer)){
-    toast('Jawaban verifikasi salah, silakan coba lagi', true);
-    STATE.analisisMathChallenge = null;
-    render();
-    return;
-  }
-  const kanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const effectiveHash = (kanitP && kanitP.passwordHash) ? kanitP.passwordHash : DB.settings.analisisPasswordHash;
-  if(simpleHash(pw) !== effectiveHash){
-    toast('Kata sandi salah', true);
-    STATE.analisisMathChallenge = null;
-    render();
-    return;
-  }
-  STATE.analisisUnlocked = true;
-  STATE.analisisMathChallenge = null;
-  toast('Berhasil masuk');
-  render();
-}
-function startEditKanitBKPairing(){
-  STATE.editingKanitBKPairing = true;
-  render();
-}
-function cancelEditKanitBKPairing(){
-  STATE.editingKanitBKPairing = false;
-  render();
-}
-async function saveKanitBKPairing(){
-  const pw = document.getElementById('kanitBKPairingPassword').value;
-  const kanitId = document.getElementById('analisisKanitBKSelect').value;
-  const currentKanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const effectiveHash = (currentKanitP && currentKanitP.passwordHash) ? currentKanitP.passwordHash : DB.settings.analisisPasswordHash;
-  if(simpleHash(pw) !== effectiveHash){
-    toast('Kata sandi tidak cocok, perubahan Kanit BK dibatalkan', true);
-    return;
-  }
-  const kanitP = (DB.personalBK||[]).find(p=>p.id===kanitId);
-  DB.settings.kanitBKId = kanitId;
-  DB.settings.namaKanitBK = kanitP ? kanitP.nama : '';
-  await sSet('settings', DB.settings);
-  STATE.editingKanitBKPairing = false;
-  toast(kanitP ? `Kanit BK diperbarui: ${kanitP.nama}` : 'Kanit BK dikosongkan');
-  render();
-}
 async function deleteKanitBKPairing(){
   const currentKanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const usingPersonalPw = currentKanitP && currentKanitP.passwordHash && !DB.settings.analisisPasswordHash;
-  const warnExtra = usingPersonalPw
-    ? ' Karena halaman ini saat ini memakai kata sandi pribadi Kanit BK (belum ada kata sandi mandiri), menghapus pasangan ini akan membuat halaman kembali ke kondisi <b>belum terlindungi kata sandi</b> dan meminta pembuatan kata sandi baru pada kunjungan berikutnya.'
-    : ' Kata sandi mandiri halaman ini TIDAK berubah.';
-  const ok = await confirmModal('Hapus Kanit BK', 'Penetapan Kanit BK yang sedang mensupervisi akan dihapus (dikosongkan).' + warnExtra + ' Lanjutkan?', 'Hapus', true);
+  const ok = await confirmModal('Lepas Peran Kanit BK', `Penetapan Kanit BK${currentKanitP?` (${esc(currentKanitP.nama)})`:''} akan dihapus. Akses ke halaman "Analisis Data Jurnal Konselor" akan tertutup sampai Admin BK menetapkan Kanit BK baru. Lanjutkan?`, 'Lepas', true);
   if(!ok) return;
   await logActivity(`Melepas peran Kanit BK${currentKanitP?` dari ${esc(currentKanitP.nama)}`:''}`);
   DB.settings.kanitBKId = '';
   DB.settings.namaKanitBK = '';
   await sSet('settings', DB.settings);
-  STATE.analisisUnlocked = usingPersonalPw ? false : STATE.analisisUnlocked;
-  toast('Kanit BK dihapus/dikosongkan');
+  toast('Kanit BK dilepas');
   render();
 }
 
 function buildPasswordControlPanelHtml(){
   const kanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const kanitLinked = kanitP && kanitP.passwordHash;
   const rows = (DB.personalBK||[]).map(p=>{
     const isKanit = p.id === DB.settings.kanitBKId;
     const isAdmin = p.id === DB.settings.adminBKId;
@@ -4668,11 +4467,11 @@ function buildPasswordControlPanelHtml(){
     </table>
     </div>
     <div class="warnbox">
-      <div class="wtitle">&#8505; Kata Sandi Analisis Data Jurnal Konselor</div>
+      <div class="wtitle">&#8505; Akses Analisis Data Jurnal Konselor</div>
       <div class="wbody">
-        ${kanitLinked
-          ? `Kanit BK saat ini adalah <b>${esc(kanitP.nama)}</b>. Kata sandi Analisis Data Jurnal Konselor otomatis mengikuti kata sandi pribadi ${esc(kanitP.nama)} &mdash; tidak perlu kata sandi terpisah. Reset kata sandi ${esc(kanitP.nama)} pada tabel di atas juga akan mereset akses ke Analisis Data.`
-          : `Belum ada Kanit BK dengan kata sandi pribadi aktif. Halaman Analisis Data Jurnal Konselor menggunakan kata sandi mandiri.<br><button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="resetAnalisisPassword()" ${DB.settings.analisisPasswordHash ? '' : 'disabled'}>Reset Kata Sandi Mandiri Analisis Data</button>`
+        ${kanitP
+          ? `Kanit BK saat ini adalah <b>${esc(kanitP.nama)}</b>. Ia otomatis mendapat akses ke halaman "Analisis Data Jurnal Konselor" begitu masuk aplikasi dengan kata sandi pribadinya sendiri &mdash; tidak ada kata sandi tambahan. Halaman ini juga otomatis tersembunyi dari Personal BK lain.`
+          : `Belum ada Kanit BK yang ditetapkan. Gunakan tombol "Jadikan Kanit BK" pada tabel di atas agar Personal BK yang dipilih otomatis mendapat akses ke halaman "Analisis Data Jurnal Konselor".`
         }
       </div>
     </div>
@@ -4831,30 +4630,22 @@ async function resetPersonalBKPassword(id){
   render();
 }
 
-async function resetAnalisisPassword(){
-  const ok = await confirmModal(
-    'Reset Kata Sandi Analisis Data',
-    'Kata sandi halaman "Analisis Data Jurnal Konselor" akan dihapus. Siapa pun yang membuka halaman tersebut berikutnya akan diminta membuat kata sandi baru. Lanjutkan?',
-    'Reset Kata Sandi', true
-  );
-  if(!ok) return;
-  DB.settings.analisisPasswordHash = '';
-  await sSet('settings', DB.settings);
-  STATE.analisisUnlocked = false;
-  await logActivity('Reset kata sandi mandiri Analisis Data Jurnal Konselor');
-  toast('Kata sandi Analisis Data telah direset');
-  render();
-}
-
 async function renderAnalisisData(){
   await ensureAllLoaded();
-  const kanitPCheck = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const effectiveHash = (kanitPCheck && kanitPCheck.passwordHash) ? kanitPCheck.passwordHash : DB.settings.analisisPasswordHash;
-  if(!effectiveHash) return renderAnalisisSetupPassword();
-  if(!STATE.analisisUnlocked) return renderAnalisisLoginGate();
+  if(!isCurrentUserKanitBK()){
+    return `
+      <div class="pagehead">
+        <div>
+          <div class="crumbs">Analisis &amp; Evaluasi</div>
+          <h1>Analisis Data Jurnal Konselor</h1>
+        </div>
+      </div>
+      <div class="empty">Halaman ini hanya bisa diakses oleh Kanit BK. Kanit BK ditetapkan oleh Admin BK melalui halaman "Pengontrol Sistem Kata Sandi".</div>
+    `;
+  }
 
   const kanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
-  const namaKanitAktif = kanitP ? kanitP.nama : (DB.settings.namaKanitBK || '');
+  const namaKanitAktif = kanitP ? kanitP.nama : '';
 
   const rows = collectAllPersonalBKAnalysis();
   const totalWawancara = (DB.wawancaraWali||[]).length;
@@ -4885,29 +4676,7 @@ async function renderAnalisisData(){
       <div class="wbody">Data Layanan BK, Permasalahan Siswa, Layanan Klasikal BK, dan Home Visit dihitung berdasarkan kelas yang ditugaskan ke masing-masing Personal BK. Data Administrasi BK dicocokkan berdasarkan nama Guru BK yang tercatat pada setiap kegiatan. Wawancara Wali Murid Kelas 7 (${totalWawancara} kegiatan) dan Upgrading Personal BK (${totalUpgrading} kegiatan) bersifat kegiatan bersama tim BK sehingga belum dapat dipetakan ke personal tertentu &mdash; ditampilkan sebagai total tim di Ringkasan Data.</div>
     </div>
 
-    <div class="card" style="padding:14px 18px;">
-      <div class="rtop">
-        <div class="footer-note" style="margin:0;">&#128100; Kanit BK yang mensupervisi: <b>${namaKanitAktif ? esc(namaKanitAktif) : 'Belum dipilih'}</b></div>
-        <div class="ractions">
-          <button class="btn btn-outline btn-sm" onclick="startEditKanitBKPairing()">Edit</button>
-          ${DB.settings.kanitBKId ? `<button class="btn btn-ghost btn-sm" onclick="deleteKanitBKPairing()">Hapus</button>` : ''}
-        </div>
-      </div>
-      ${STATE.editingKanitBKPairing ? `
-      <div class="field" style="margin-top:10px;">
-        <label>Ganti Kanit BK (pilih dari Personal BK yang bertugas)</label>
-        ${buildKanitBKSelectHtml(DB.settings.kanitBKId)}
-      </div>
-      <div class="field">
-        <label>Konfirmasi Kata Sandi (memastikan pasangan Kata Sandi &ndash; Kanit BK benar)</label>
-        <input type="password" id="kanitBKPairingPassword" placeholder="Masukkan kata sandi halaman ini">
-      </div>
-      <div class="btnrow">
-        <button class="btn btn-primary btn-sm" onclick="saveKanitBKPairing()">Simpan</button>
-        <button class="btn btn-ghost btn-sm" onclick="cancelEditKanitBKPairing()">Batal</button>
-      </div>
-      ` : ''}
-    </div>
+    <div class="footer-note" style="margin-bottom:14px;">&#128100; Anda masuk sebagai Kanit BK: <b>${esc(namaKanitAktif)}</b> &mdash; penetapan ini hanya dapat diubah oleh Admin BK melalui halaman "Pengontrol Sistem Kata Sandi".</div>
 
     <div class="card">
       <h2>&#128202; Perbandingan Beban Kerja Antar Personal BK</h2>
