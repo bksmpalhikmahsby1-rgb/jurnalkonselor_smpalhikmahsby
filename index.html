@@ -470,8 +470,12 @@ async function loadStudents(){
     if(DB.settings.namaWakaKesiswaan === undefined){ DB.settings.namaWakaKesiswaan = ''; settingsChanged = true; }
     if(DB.settings.analisisPasswordHash === undefined){ DB.settings.analisisPasswordHash = ''; settingsChanged = true; }
     if(DB.settings.namaKanitBK === undefined){ DB.settings.namaKanitBK = ''; settingsChanged = true; }
+    const isFreshInstall = DB.settings.activePersonalBKId === undefined;
     if(DB.settings.kanitBKId === undefined){ DB.settings.kanitBKId = ''; settingsChanged = true; }
-    if(DB.settings.adminBKId === undefined){ DB.settings.adminBKId = ''; settingsChanged = true; }
+    if(DB.settings.adminBKId === undefined){
+      DB.settings.adminBKId = isFreshInstall ? 'pbk_seed_1' : '';
+      settingsChanged = true;
+    }
     if(DB.settings.activePersonalBKId === undefined){
       // Migrasi pertama kali: data yang sudah ada dianggap milik tugas Erwin Kohar Ferdihananto, M.Psi
       DB.settings.activePersonalBKId = 'pbk_seed_1';
@@ -764,7 +768,7 @@ function isPersonalBKFullyAuthenticated(){
 }
 function isCurrentUserAdminBK(){
   if(!isPersonalBKFullyAuthenticated()) return false;
-  if(!DB.settings.adminBKId) return true; // belum ada Admin BK ditetapkan -> boleh masuk untuk menetapkan yang pertama
+  if(!DB.settings.adminBKId) return false; // belum ada Admin BK ditetapkan -> tidak ada yang bisa melihat halaman ini
   return DB.settings.activePersonalBKId === DB.settings.adminBKId;
 }
 function isCurrentUserKanitBK(){
@@ -4580,7 +4584,7 @@ async function setAdminBK(id){
 }
 async function removeAdminBK(){
   const p = (DB.personalBK||[]).find(x=>x.id===DB.settings.adminBKId);
-  const ok = await confirmModal('Lepas Peran Admin BK', `Penetapan Admin BK${p?` (${esc(p.nama)})`:''} akan dikosongkan. Lanjutkan?`, 'Lepas', true);
+  const ok = await confirmModal('Lepas Peran Admin BK', `Penetapan Admin BK${p?` (${esc(p.nama)})`:''} akan dikosongkan. <b>Setelah ini, halaman "Pengontrol Sistem Kata Sandi" tidak akan bisa diakses siapa pun</b> sampai Anda memilih Admin BK baru melalui menu ini sebelum keluar. Yakin ingin melanjutkan?`, 'Lepas', true);
   if(!ok) return;
   DB.settings.adminBKId = '';
   await sSet('settings', DB.settings);
