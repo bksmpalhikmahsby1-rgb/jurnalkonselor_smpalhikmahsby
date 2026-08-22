@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
 <style>
 :root{
   --teal-950:#0a2e2a;
@@ -280,6 +281,50 @@ table.list .rowactions{display:flex;gap:6px;flex-wrap:wrap;}
   .wrap{padding:18px 12px 60px;}
   .pagehead h1{font-size:21px;}
 }
+
+/* ================== TAMPILAN KHUSUS HP (tidak memengaruhi laptop/PC) ================== */
+@media (min-width:769px){
+  .hamburger-btn{display:none;}
+}
+@media (max-width:768px){
+  /* --- Menu navigasi jadi hamburger --- */
+  .hamburger-btn{
+    display:flex;align-items:center;justify-content:center;
+    width:40px;height:40px;margin-left:auto;flex-shrink:0;
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:8px;
+    color:var(--white);font-size:20px;cursor:pointer;
+  }
+  .hamburger-btn:active{background:rgba(255,255,255,.25);}
+  .topbar{flex-wrap:wrap;}
+  .topbar nav{
+    display:none;width:100%;margin-left:0;margin-top:12px;
+    flex-direction:column;gap:4px;
+  }
+  .topbar nav.mobile-open{display:flex;}
+  .topbar nav button{width:100%;text-align:left;padding:12px 14px;font-size:14.5px;}
+
+  /* --- Tombol aksi menumpuk penuh, mudah disentuh --- */
+  .ractions,.btnrow{flex-wrap:wrap;}
+  .ractions .btn,.btnrow .btn{flex:1 1 auto;min-width:0;}
+  .record .ractions{flex-direction:column;}
+  .record .ractions .btn{width:100%;padding:12px 14px;font-size:14px;}
+  .modal .btnrow{flex-direction:column;}
+  .modal .btnrow .btn{width:100%;}
+
+  /* --- Formulir isian selebar layar --- */
+  .field input,.field select,.field textarea{width:100%;box-sizing:border-box;padding:11px 12px;font-size:15px;}
+
+  /* --- Tabel lebar: beri isyarat visual bahwa bisa digeser --- */
+  div[style*="overflow-x:auto"]{position:relative;-webkit-overflow-scrolling:touch;}
+  div[style*="overflow-x:auto"]::after{
+    content:'';position:absolute;top:0;right:0;bottom:0;width:22px;
+    background:linear-gradient(to right, transparent, rgba(10,46,42,.12));
+    pointer-events:none;
+  }
+
+  /* --- Kartu ringkasan (nama+badge) tidak berdesakan --- */
+  .rtop{gap:8px;}
+}
 </style>
 </head>
 <body>
@@ -291,7 +336,8 @@ table.list .rowactions{display:flex;gap:6px;flex-wrap:wrap;}
     <div class="t2">SMP Al Hikmah Full Day School Surabaya</div>
   </div>
   <span id="activePersonalBadge" class="pill pill-gold" style="margin-left:16px;display:none;"></span>
-  <nav>
+  <button id="navHamburger" class="hamburger-btn" aria-label="Buka menu" aria-expanded="false">&#9776;</button>
+  <nav id="topNav">
     <button data-nav="personalbk">Personal BK</button>
     <button data-nav="beranda" class="active">Beranda</button>
     <button data-nav="administrasi">Layanan Administrasi BK</button>
@@ -457,13 +503,27 @@ const DB = {
   upgrading: null,         // [records] Upgrading Personal BK (global)
   activityLog: null,       // [{ts, actor, action}] Log aktivitas sensitif (reset password, hapus data, dsb)
   settings: { lastGuru: '', tahunAjaran: '2025-2026' },
-  loadedStudents: false
+  loadedStudents: false,
+  personalBKConfirmedOnce: false, // true setelah sekali berhasil memuat personal_bk ASLI dari server pada sesi ini
+  kelasCapaianManual: null, // {kelas: {ketuntasan}} - isian manual Ketuntasan per kelas
+  kelasWaliKelas: null, // {kelas: namaWaliKelas} - dikelola terpusat oleh Admin BK
+  settingsConfirmedOnce: false    // true setelah sekali berhasil memuat settings ASLI dari server pada sesi ini
 };
 
 async function loadStudents(){
   if(!DB.loadedStudents){
     DB.students = (await sGet('students')) || [];
-    DB.settings = (await sGet('settings')) || { lastGuru: '', tahunAjaran: '2025-2026' };
+    const fetchedSettings = await sGet('settings');
+    // PENTING: fetchedSettings bisa null baik karena pengaturan MEMANG belum pernah ada,
+    // MAUPUN karena permintaan ke Google Sheets gagal sesaat (mis. koneksi terputus).
+    // Kedua kondisi ini TIDAK BISA dibedakan dari sisi klien. Kalau kita langsung menyimpan
+    // ulang pengaturan setiap kali fetchedSettings kosong, kegagalan jaringan sesaat bisa
+    // menghapus SELURUH pengaturan asli (termasuk Admin BK & Kanit BK yang sudah ditetapkan)
+    // dan menggantinya dengan versi kosong. Karena itu: migrasi/isian default HANYA disimpan
+    // ulang ke penyimpanan kalau fetchedSettings benar-benar berhasil didapat (bukan null).
+    const settingsLoadedSuccessfully = !!fetchedSettings;
+    DB.settings = fetchedSettings || { lastGuru: '', tahunAjaran: '2025-2026' };
+    if(settingsLoadedSuccessfully) DB.settingsConfirmedOnce = true;
     if(!DB.settings.tahunAjaran) DB.settings.tahunAjaran = '2025-2026';
     let settingsChanged = false;
     if(DB.settings.namaKepalaSekolah === undefined){ DB.settings.namaKepalaSekolah = ''; settingsChanged = true; }
@@ -492,7 +552,7 @@ async function loadStudents(){
       if(!DB.settings.lastGuru) DB.settings.lastGuru = 'Erwin Kohar Ferdihananto, M.Psi';
       settingsChanged = true;
     }
-    if(settingsChanged) await sSet('settings', DB.settings);
+    if(settingsChanged && settingsLoadedSuccessfully) await sSet('settings', DB.settings);
     DB.loadedStudents = true;
   }
   return DB.students;
@@ -540,9 +600,17 @@ async function loadPersonalBK(force){
     const stored = await sGet('personal_bk');
     if(stored && Array.isArray(stored) && stored.length){
       DB.personalBK = stored;
+      DB.personalBKConfirmedOnce = true; // sudah terbukti ada data asli di server pada sesi ini
     } else {
+      // PENTING: jangan langsung menyimpan default ke penyimpanan di sini.
+      // sGet() mengembalikan null baik saat data memang belum pernah ada MAUPUN saat
+      // permintaan jaringan gagal sesaat (mis. koneksi terputus) - keduanya tidak bisa
+      // dibedakan. Kalau langsung disimpan di sini, kegagalan jaringan sesaat bisa
+      // menimpa/menghapus data asli yang sebenarnya sudah tersimpan di Google Sheets.
+      // Cukup pakai default ini di memori untuk sesi saat ini; penyimpanan sungguhan
+      // baru terjadi wajar saat pengguna benar-benar melakukan aksi (centang kelas,
+      // buat kata sandi, dsb).
       DB.personalBK = DEFAULT_PERSONAL_BK.map(p => ({ id:p.id, nama:p.nama, kelasTugas:[], jumlahSiswaKelas:{}, passwordHash:'' }));
-      await savePersonalBK();
     }
     // Migrasi format lama (tugas dikelompokkan per jenjang+putra/putri) ke array kelasTugas datar
     let migrated = false;
@@ -565,11 +633,138 @@ async function loadPersonalBK(force){
         migrated = true;
       }
     });
-    if(migrated) await savePersonalBK();
+    // Hanya simpan ulang kalau memang ada MIGRASI FORMAT pada data yang BERHASIL dimuat dari
+    // penyimpanan (bukan hasil fallback kosong), supaya kegagalan jaringan tidak pernah memicu penyimpanan.
+    if(migrated && stored && Array.isArray(stored) && stored.length) await savePersonalBK();
   }
   return DB.personalBK;
 }
 async function savePersonalBK(){ await sSet('personal_bk', DB.personalBK || []); }
+
+// PENTING: Setiap perubahan pada SATU Personal BK (centang kelas, buat/reset password, dsb)
+// TIDAK BOLEH langsung menyimpan seluruh array DB.personalBK di memori, karena salinan itu
+// bisa saja SUDAH USANG apabila Personal BK lain baru saja menyimpan perubahan dari sesi/
+// perangkat lain. Kalau langsung ditimpa, perubahan orang lain yang belum sempat termuat
+// ulang di sesi ini akan HILANG. Fungsi ini mengambil versi TERBARU dari penyimpanan dulu,
+// menggabungkan HANYA perubahan pada satu orang yang dimaksud, baru menyimpannya kembali.
+// Mengambil data dengan percobaan ulang otomatis - kegagalan jaringan seringkali hanya sesaat,
+// jadi mencoba beberapa kali dulu sebelum benar-benar menyerah menghindari pembatalan yang tidak perlu.
+async function sGetWithRetry(key, attempts){
+  attempts = attempts || 3;
+  for(let i=0;i<attempts;i++){
+    const val = await sGet(key);
+    if(val !== null) return val;
+    if(i < attempts-1) await new Promise(r=>setTimeout(r, 350 * (i+1)));
+  }
+  return null;
+}
+
+async function mutatePersonalBKSafely(id, mutatorFn){
+  const fresh = await sGetWithRetry('personal_bk');
+  if(fresh && Array.isArray(fresh) && fresh.length){
+    DB.personalBKConfirmedOnce = true;
+  } else if(DB.personalBKConfirmedOnce){
+    // PENTING: kita SUDAH PERNAH membuktikan data asli ada di server pada sesi ini, tapi sekarang
+    // gagal memastikannya lagi (bahkan setelah dicoba ulang) -> JANGAN pernah menyimpan berdasarkan
+    // salinan di memori yang mungkin sudah tidak akurat. Lebih baik gagal dengan jelas (pengguna
+    // tinggal coba lagi) daripada diam-diam menimpa/menghapus data Personal BK lain yang sebenarnya
+    // masih ada di Google Sheets.
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return null;
+  }
+  // Kalau belum pernah terkonfirmasi sama sekali pada sesi ini (kemungkinan besar instalasi baru
+  // yang datanya memang belum pernah ada), aman melanjutkan dengan salinan di memori sebagai dasar.
+  let freshArray = (fresh && Array.isArray(fresh) && fresh.length) ? fresh : (DB.personalBK||[]).map(p=>({...p}));
+  let idx = freshArray.findIndex(p=>p.id===id);
+  if(idx === -1){
+    const memP = (DB.personalBK||[]).find(p=>p.id===id);
+    if(memP){ freshArray = [...freshArray, {...memP}]; idx = freshArray.length - 1; }
+    else { toast('Data Personal BK ini tidak ditemukan.', true); return null; }
+  }
+  mutatorFn(freshArray[idx]);
+  const saveOk = await sSet('personal_bk', freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return null;
+  }
+  DB.personalBK = freshArray;
+  DB.personalBKConfirmedOnce = true;
+  return freshArray[idx];
+}
+// Sama seperti di atas, tapi untuk pengaturan global (DB.settings) seperti adminBKId/kanitBKId.
+async function mutateSettingsSafely(mutatorFn){
+  const fresh = await sGetWithRetry('settings');
+  if(fresh){
+    DB.settingsConfirmedOnce = true;
+  } else if(DB.settingsConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshSettings = fresh || {...DB.settings};
+  mutatorFn(freshSettings);
+  const saveOk = await sSet('settings', freshSettings);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.settings = freshSettings;
+  DB.settingsConfirmedOnce = true;
+  return true;
+}
+
+async function loadKelasCapaianManual(force){
+  if(force || DB.kelasCapaianManual === null){
+    DB.kelasCapaianManual = (await sGet('kelas_capaian_manual')) || {};
+  }
+  return DB.kelasCapaianManual;
+}
+async function updateKelasCapaianManual(kelas, field, value){
+  const fresh = await sGetWithRetry('kelas_capaian_manual');
+  let freshData = fresh || DB.kelasCapaianManual || {};
+  if(!freshData[kelas]) freshData[kelas] = { ketuntasan:'' };
+  freshData[kelas][field] = value;
+  const saveOk = await sSet('kelas_capaian_manual', freshData);
+  if(!saveOk){
+    toast('Gagal menyimpan, periksa koneksi internet Anda dan coba lagi.', true);
+    return;
+  }
+  DB.kelasCapaianManual = freshData;
+}
+
+async function loadKelasWaliKelas(force){
+  if(force || DB.kelasWaliKelas === null){
+    DB.kelasWaliKelas = (await sGet('kelas_wali_kelas')) || {};
+  }
+  return DB.kelasWaliKelas;
+}
+async function saveKelasWaliKelasEntry(kelas, namaWali, editingKelasLama){
+  const fresh = await sGetWithRetry('kelas_wali_kelas');
+  let freshData = fresh || DB.kelasWaliKelas || {};
+  // Kalau ini hasil edit dan kelasnya BERGANTI, hapus entri kelas lama dulu
+  if(editingKelasLama && editingKelasLama !== kelas){
+    delete freshData[editingKelasLama];
+  }
+  freshData[kelas] = namaWali;
+  const saveOk = await sSet('kelas_wali_kelas', freshData);
+  if(!saveOk){
+    toast('Gagal menyimpan, periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.kelasWaliKelas = freshData;
+  return true;
+}
+async function deleteKelasWaliKelasEntry(kelas){
+  const fresh = await sGetWithRetry('kelas_wali_kelas');
+  let freshData = fresh || DB.kelasWaliKelas || {};
+  delete freshData[kelas];
+  const saveOk = await sSet('kelas_wali_kelas', freshData);
+  if(!saveOk){
+    toast('Gagal menyimpan, periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.kelasWaliKelas = freshData;
+  return true;
+}
 
 async function loadActivityLog(force){
   if(force || DB.activityLog === null){
@@ -687,6 +882,8 @@ const STATE = {
   unservedExpandedClasses: {},
   analisisExpandedIds: {},
   personalBKAuthTarget: null,
+  personalBKConfirmTarget: null,
+  editingWaliKelasId: null,
   personalBKAuthenticated: false,
   kelolaKelasEditIds: {},
   personalBKAuthMode: null,
@@ -739,6 +936,14 @@ document.addEventListener('DOMContentLoaded', init);
 async function init(){
   document.getElementById('logoTop').src = LOGO_ICON;
   document.getElementById('app').innerHTML = '<div class="empty"><div class="big">Memuat data…</div>Mohon tunggu sebentar.</div>';
+  const hamburgerBtn = document.getElementById('navHamburger');
+  const topNav = document.getElementById('topNav');
+  if(hamburgerBtn && topNav){
+    hamburgerBtn.addEventListener('click', ()=>{
+      const isOpen = topNav.classList.toggle('mobile-open');
+      hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    });
+  }
   document.querySelectorAll('.topbar nav button').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       if(btn.dataset.nav !== 'personalbk' && !isPersonalBKFullyAuthenticated()){
@@ -758,6 +963,8 @@ async function init(){
       }
       STATE.view = btn.dataset.nav;
       STATE.currentInduk = null;
+      if(topNav){ topNav.classList.remove('mobile-open'); }
+      if(hamburgerBtn){ hamburgerBtn.setAttribute('aria-expanded', 'false'); }
       render();
     });
   });
@@ -872,6 +1079,7 @@ function buildPersonalBKCardHtml(p, isActive){
   const totalKelas = (p.kelasTugas||[]).length;
   const totalSiswaDiisi = Object.values(p.jumlahSiswaKelas||{}).reduce((a,n)=>a+(Number(n)||0),0);
   const authTarget = STATE.personalBKAuthTarget === p.id;
+  const confirmTarget = STATE.personalBKConfirmTarget === p.id;
   const hasDataToConfirm = totalKelas>0 && totalSiswaDiisi>0;
   return `
     <div class="record" style="${isActive ? 'border:1.5px solid var(--gold-500);background:var(--gold-100);' : ''}">
@@ -879,23 +1087,49 @@ function buildPersonalBKCardHtml(p, isActive){
         <div class="tag">${esc(p.nama)} ${isActive ? '<span class="pill pill-gold" style="margin-left:6px;">Sedang Bertugas</span>' : ''}</div>
         <span class="pill pill-teal">${totalKelas} kelas ditugaskan</span>
       </div>
-      ${hasDataToConfirm ? `
+      ${confirmTarget ? `
       <div class="warnbox" style="margin-top:10px;margin-bottom:0;">
         <div class="wtitle">&#9888; Pastikan Data Sudah Benar</div>
-        <div class="wbody">Centangan kelas dan jumlah siswa akan tercatat sebagai tugas kinerja Anda dan membuka akses ke seluruh menu aplikasi. Periksa kembali kelas yang dicentang. <b>Jumlah siswa di kelas masih bisa diubah kapan saja</b> apabila ada kekeliruan.</div>
+        <div class="wbody">Centangan kelas dan jumlah siswa akan tercatat sebagai tugas kinerja Anda dan membuka akses ke seluruh menu aplikasi. Periksa kembali kelas yang dicentang (<b>${esc((p.kelasTugas||[]).join(', '))}</b>) dan jumlah siswa yang sudah diisi (<b>${totalSiswaDiisi} siswa</b>). Jumlah siswa di kelas masih bisa diubah kapan saja apabila ada kekeliruan.</div>
       </div>
-      ` : ''}
+      <div class="btnrow" style="margin-top:12px;">
+        <button class="btn btn-ghost btn-sm" onclick="cancelPersonalBKConfirm()">&#8592; Kembali</button>
+        <button class="btn btn-gold btn-sm" onclick="confirmPersonalBKDataThenEnter('${p.id}')">Oke, Lanjutkan &rarr;</button>
+      </div>
+      ` : `
       <div class="ractions" style="margin-top:10px;">
-        ${!authTarget ? `<button class="btn btn-primary btn-sm" onclick="handleSelectPersonalBKClick('${p.id}')">&#10003; Pilih &amp; Masuk Aplikasi</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="togglePersonalBKPanel('${p.id}')">${expanded ? '&#9650; Tutup' : '&#9660;'} Atur Tugas Jenjang Kelas</button>
         <button class="btn btn-outline btn-sm" onclick="togglePersonalBKJumlahPanel('${p.id}')">${jumlahExpanded ? '&#9650; Tutup' : '&#128202;'} Jumlah Siswa di Kelas${totalSiswaDiisi ? ` (${totalSiswaDiisi})` : ''}</button>
+        ${!authTarget ? `<button class="btn ${hasDataToConfirm ? 'btn-gold' : 'btn-primary'} btn-sm" onclick="handleMasukClick('${p.id}')">Masuk</button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="deletePersonalBKEntry('${p.id}')">Hapus</button>
       </div>
+      `}
       ${authTarget ? buildPersonalBKAuthFormHtml(p) : ''}
-      ${(!authTarget && expanded) ? buildTugasPanelHtml(p) : ''}
-      ${(!authTarget && jumlahExpanded) ? buildJumlahSiswaPanelHtml(p) : ''}
+      ${(!authTarget && !confirmTarget && expanded) ? buildTugasPanelHtml(p) : ''}
+      ${(!authTarget && !confirmTarget && jumlahExpanded) ? buildJumlahSiswaPanelHtml(p) : ''}
     </div>
   `;
+}
+function handleMasukClick(id){
+  const p = (DB.personalBK||[]).find(x=>x.id===id);
+  if(!p) return;
+  const totalKelas = (p.kelasTugas||[]).length;
+  const totalSiswaDiisi = Object.values(p.jumlahSiswaKelas||{}).reduce((a,n)=>a+(Number(n)||0),0);
+  const hasDataToConfirm = totalKelas>0 && totalSiswaDiisi>0;
+  if(hasDataToConfirm){
+    STATE.personalBKConfirmTarget = id;
+    render();
+  } else {
+    handleSelectPersonalBKClick(id);
+  }
+}
+function cancelPersonalBKConfirm(){
+  STATE.personalBKConfirmTarget = null;
+  render();
+}
+function confirmPersonalBKDataThenEnter(id){
+  STATE.personalBKConfirmTarget = null;
+  handleSelectPersonalBKClick(id);
 }
 
 function buildPersonalBKAuthFormHtml(p){
@@ -978,8 +1212,8 @@ async function submitPersonalBKSetup(id){
   if(pw1 !== pw2){ toast('Konfirmasi kata sandi tidak cocok', true); return; }
   const p = (DB.personalBK||[]).find(x=>x.id===id);
   if(!p) return;
-  p.passwordHash = simpleHash(pw1);
-  await savePersonalBK();
+  const result = await mutatePersonalBKSafely(id, fresh=>{ fresh.passwordHash = simpleHash(pw1); });
+  if(!result) return; // gagal menyimpan (sudah ada pesan error) -> jangan lanjutkan seolah berhasil
   STATE.personalBKAuthTarget = null;
   STATE.personalBKAuthenticated = true;
   await selectPersonalBK(id);
@@ -1043,16 +1277,15 @@ function togglePersonalBKJumlahPanel(id){
 }
 
 async function updatePersonalBKJumlahSiswa(pid, kelas, value){
-  const p = (DB.personalBK||[]).find(x=>x.id===pid);
-  if(!p) return;
-  p.jumlahSiswaKelas = p.jumlahSiswaKelas || {};
   const n = parseInt(value, 10);
-  if(value === '' || isNaN(n) || n < 0){
-    delete p.jumlahSiswaKelas[kelas];
-  } else {
-    p.jumlahSiswaKelas[kelas] = n;
-  }
-  await savePersonalBK();
+  await mutatePersonalBKSafely(pid, fresh=>{
+    fresh.jumlahSiswaKelas = fresh.jumlahSiswaKelas || {};
+    if(value === '' || isNaN(n) || n < 0){
+      delete fresh.jumlahSiswaKelas[kelas];
+    } else {
+      fresh.jumlahSiswaKelas[kelas] = n;
+    }
+  });
   render();
 }
 
@@ -1087,10 +1320,7 @@ function togglePersonalBKPanel(id){
 async function togglePersonalBKKelas(pid, kelas, checked, checkboxEl){
   const p = (DB.personalBK||[]).find(x=>x.id===pid);
   if(!p) return;
-  p.kelasTugas = p.kelasTugas || [];
-  if(checked){
-    if(!p.kelasTugas.includes(kelas)) p.kelasTugas.push(kelas);
-  } else {
+  if(!checked){
     const jumlahTerisi = Number((p.jumlahSiswaKelas||{})[kelas]) || 0;
     const adaCatatan = jumlahTerisi > 0;
     const ok = await confirmModal(
@@ -1102,10 +1332,41 @@ async function togglePersonalBKKelas(pid, kelas, checked, checkboxEl){
       if(checkboxEl) checkboxEl.checked = true;
       return;
     }
-    p.kelasTugas = p.kelasTugas.filter(k=>k!==kelas);
-    if(p.jumlahSiswaKelas) delete p.jumlahSiswaKelas[kelas];
+    await mutatePersonalBKSafely(pid, fresh=>{
+      fresh.kelasTugas = (fresh.kelasTugas||[]).filter(k=>k!==kelas);
+      if(fresh.jumlahSiswaKelas) delete fresh.jumlahSiswaKelas[kelas];
+    });
+    render();
+    return;
   }
-  await savePersonalBK();
+
+  // ATURAN: satu kelas hanya boleh dimiliki SATU Personal BK. Cek dulu terhadap data
+  // TERBARU dari server (bukan salinan lokal yang mungkin usang) sebelum mengizinkan centang.
+  const fresh = await sGetWithRetry('personal_bk');
+  if(!fresh && DB.personalBKConfirmedOnce){
+    toast('Gagal memastikan data terbaru. Periksa koneksi internet Anda dan coba lagi.', true);
+    if(checkboxEl) checkboxEl.checked = false;
+    return;
+  }
+  let freshArray = (fresh && Array.isArray(fresh) && fresh.length) ? fresh : (DB.personalBK||[]).map(x=>({...x}));
+  if(fresh && Array.isArray(fresh) && fresh.length) DB.personalBKConfirmedOnce = true;
+  const owner = freshArray.find(other => other.id !== pid && (other.kelasTugas||[]).includes(kelas));
+  if(owner){
+    toast(`⚠ Kelas ${kelas} sudah ditugaskan ke ${owner.nama}. Satu kelas hanya boleh dimiliki satu Personal BK — periksa kembali, kemungkinan salah centang atau ada penugasan ganda.`, true);
+    if(checkboxEl) checkboxEl.checked = false;
+    return;
+  }
+  const idx = freshArray.findIndex(x=>x.id===pid);
+  if(idx === -1){ toast('Data Personal BK ini tidak ditemukan.', true); if(checkboxEl) checkboxEl.checked = false; return; }
+  freshArray[idx].kelasTugas = freshArray[idx].kelasTugas || [];
+  if(!freshArray[idx].kelasTugas.includes(kelas)) freshArray[idx].kelasTugas.push(kelas);
+  const saveOk = await sSet('personal_bk', freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    if(checkboxEl) checkboxEl.checked = false;
+    return;
+  }
+  DB.personalBK = freshArray;
   render();
 }
 
@@ -1113,9 +1374,11 @@ async function addPersonalBKEntry(){
   const input = document.getElementById('pbkNewNama');
   const nama = input ? input.value.trim() : '';
   if(!nama){ toast('Isi nama Personal BK terlebih dahulu', true); return; }
-  await loadPersonalBK();
-  DB.personalBK.push({ id: uid(), nama, kelasTugas:[], jumlahSiswaKelas:{}, passwordHash:'' });
-  await savePersonalBK();
+  const fresh = await sGet('personal_bk');
+  let freshArray = (fresh && Array.isArray(fresh) && fresh.length) ? fresh : (DB.personalBK||[]).map(p=>({...p}));
+  freshArray.push({ id: uid(), nama, kelasTugas:[], jumlahSiswaKelas:{}, passwordHash:'' });
+  await sSet('personal_bk', freshArray);
+  DB.personalBK = freshArray;
   toast('Personal BK "' + nama + '" ditambahkan');
   render();
 }
@@ -1123,13 +1386,19 @@ async function addPersonalBKEntry(){
 async function deletePersonalBKEntry(id){
   const p = (DB.personalBK||[]).find(x=>x.id===id);
   if(!p) return;
-  const ok = await confirmModal('Hapus Personal BK', `Data Personal BK <b>${esc(p.nama)}</b> beserta pengaturan tugas jenjang kelasnya akan dihapus permanen. Lanjutkan?`, 'Hapus', true);
+  const ok = await textConfirmModal(
+    '⚠ Hapus Personal BK Secara Permanen',
+    `<b>${esc(p.nama)} akan dihapus PERMANEN</b> beserta seluruh kelas tugas dan kata sandinya. Tindakan ini tidak bisa dibatalkan.`,
+    'HAPUS'
+  );
   if(!ok) return;
-  DB.personalBK = (DB.personalBK||[]).filter(x=>x.id!==id);
-  await savePersonalBK();
+  const fresh = await sGet('personal_bk');
+  let freshArray = (fresh && Array.isArray(fresh) && fresh.length) ? fresh : (DB.personalBK||[]).map(p=>({...p}));
+  freshArray = freshArray.filter(x=>x.id!==id);
+  await sSet('personal_bk', freshArray);
+  DB.personalBK = freshArray;
   if(DB.settings.activePersonalBKId === id){
-    DB.settings.activePersonalBKId = null;
-    await sSet('settings', DB.settings);
+    await mutateSettingsSafely(fresh=>{ fresh.activePersonalBKId = null; });
   }
   toast('Personal BK dihapus');
   render();
@@ -1138,9 +1407,15 @@ async function deletePersonalBKEntry(id){
 async function selectPersonalBK(id){
   const p = (DB.personalBK||[]).find(x=>x.id===id);
   if(!p) return;
-  DB.settings.activePersonalBKId = id;
-  DB.settings.lastGuru = p.nama;
-  await sSet('settings', DB.settings);
+  const ok = await mutateSettingsSafely(fresh=>{
+    fresh.activePersonalBKId = id;
+    fresh.lastGuru = p.nama;
+  });
+  if(!ok){
+    STATE.personalBKAuthenticated = false;
+    render();
+    return;
+  }
   const hasTugas = (p.kelasTugas||[]).length > 0;
   if(hasTugas){
     STATE.view = 'beranda';
@@ -1206,6 +1481,74 @@ function collectPersonalBKInfografisRows(){
 
 function collectAllPersonalBKAnalysis(){
   return (DB.personalBK||[]).map(computePersonalBKAnalysisRow).sort((a,b)=> b.total - a.total);
+}
+
+function collectKelasCapaianRows(){
+  const rows = collectAllPersonalBKAnalysis();
+  const flat = [];
+  rows.forEach(r=>{
+    (r.kelasBreakdown||[]).forEach(kb=>{
+      flat.push({
+        kelas: kb.kelas,
+        jumlahSiswa: kb.jumlahSiswa,
+        terkonseling: kb.siswaTerlayani,
+        belum: kb.jumlahSiswa - kb.siswaTerlayani,
+        persenCapaian: kb.persenTerlayani,
+        personalBK: r.nama
+      });
+    });
+  });
+  flat.sort((a,b)=>{
+    const ia = KELAS_LIST.indexOf(a.kelas), ib = KELAS_LIST.indexOf(b.kelas);
+    return (ia===-1?999:ia) - (ib===-1?999:ib);
+  });
+  return flat;
+}
+
+function buildKelasCapaianTableHtml(){
+  const rows = collectKelasCapaianRows();
+  if(!rows.length){
+    return `<div class="empty">Belum ada kelas dengan Jumlah Siswa di Kelas yang terisi.</div>`;
+  }
+  const manual = DB.kelasCapaianManual || {};
+  const waliKelasData = DB.kelasWaliKelas || {};
+  let totalSiswa=0, totalKonseling=0, totalBelum=0;
+  const bodyRows = rows.map((r,i)=>{
+    totalSiswa += r.jumlahSiswa; totalKonseling += r.terkonseling; totalBelum += r.belum;
+    const m = manual[r.kelas] || { ketuntasan:'' };
+    const namaWali = waliKelasData[r.kelas] || '';
+    return `<tr>
+      <td>${i+1}</td>
+      <td class="namecell">${esc(r.kelas)}</td>
+      <td>${r.jumlahSiswa}</td>
+      <td>${r.terkonseling}</td>
+      <td>${r.belum}</td>
+      <td>${r.persenCapaian}%</td>
+      <td><input type="text" class="kelas-ketuntasan-input" data-kelas="${esc(r.kelas)}" value="${esc(m.ketuntasan||'')}" placeholder="-" style="width:100%;min-width:90px;"></td>
+      <td style="color:var(--ink-soft);">${namaWali ? esc(namaWali) : '-'}</td>
+      <td>${esc(r.personalBK)}</td>
+    </tr>`;
+  }).join('');
+  const totalPersen = totalSiswa>0 ? Math.round((totalKonseling/totalSiswa)*1000)/10 : 0;
+  return `
+  <div style="overflow-x:auto;">
+  <table class="list">
+    <thead><tr>
+      <th>No</th><th>Kelas</th><th>Jumlah Siswa</th><th>Konseling</th><th>Belum</th><th>% Capaian</th><th>Ketuntasan</th><th>Wali Kelas</th><th>Personal BK</th>
+    </tr></thead>
+    <tbody>
+      ${bodyRows}
+      <tr style="font-weight:700;background:var(--teal-50);">
+        <td colspan="2">JUMLAH &amp; PROSENTASE</td>
+        <td>${totalSiswa}</td>
+        <td>${totalKonseling}</td>
+        <td>${totalBelum}</td>
+        <td>${totalPersen}%</td>
+        <td colspan="3"></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>`;
 }
 
 function buildPersonalBKInfografisHtml(){
@@ -2149,8 +2492,7 @@ async function saveEditKlasikal(oldKelas, id){
     DB.klasikal[oldKelas][idx] = updated;
     await saveKlasikal(oldKelas);
   }
-  DB.settings.lastGuru = guru;
-  await sSet('settings', DB.settings);
+  await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
   STATE.klasikalEditingId = null;
   STATE.klasikalExpandedIds[id] = true;
   toast('Perubahan Layanan Klasikal BK tersimpan');
@@ -2794,8 +3136,7 @@ function bindGlobalHandlers(){
       await loadKlasikal(kelas);
       DB.klasikal[kelas].push(rec);
       await saveKlasikal(kelas);
-      DB.settings.lastGuru = rec.guru;
-      await sSet('settings', DB.settings);
+      await mutateSettingsSafely(fresh=>{ fresh.lastGuru = rec.guru; });
       toast('Layanan Klasikal BK tersimpan');
       render();
     });
@@ -2805,8 +3146,7 @@ function bindGlobalHandlers(){
 
   const tahunAjaran = document.getElementById('tahunAjaran');
   if(tahunAjaran) tahunAjaran.addEventListener('change', async e=>{
-    DB.settings.tahunAjaran = e.target.value;
-    await sSet('settings', DB.settings);
+    await mutateSettingsSafely(fresh=>{ fresh.tahunAjaran = e.target.value; });
     toast('Tahun ajaran diperbarui: ' + e.target.value);
   });
 }
@@ -3108,8 +3448,7 @@ async function saveEditLayanan(induk, id){
   if(!tgl || !jenis || !bidang || !hasil){ toast('Lengkapi semua isian', true); return; }
   rec.tgl = tgl; rec.jenis = jenis; rec.bidang = bidang; rec.guru = guru; rec.hasil = hasil;
   await saveLayanan(induk);
-  DB.settings.lastGuru = guru;
-  await sSet('settings', DB.settings);
+  await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
   STATE.layananEditingId = null;
   toast('Perubahan Layanan BK tersimpan');
   render();
@@ -3326,8 +3665,7 @@ document.addEventListener('submit', async (e)=>{
       DB.layanan[m.induk].push(rec);
       await saveLayanan(m.induk);
     }
-    DB.settings.lastGuru = guru;
-    await sSet('settings', DB.settings);
+    await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
     toast(`Layanan BK kelompok tersimpan untuk ${members.length} siswa`);
     STATE.lastKelompokSession = { kelompokId, tgl, jenis, bidang, guru, hasil, members };
     render();
@@ -3354,8 +3692,7 @@ document.addEventListener('submit', async (e)=>{
     DB.layanan[induk] = DB.layanan[induk] || [];
     DB.layanan[induk].push(rec);
     await saveLayanan(induk);
-    DB.settings.lastGuru = rec.guru;
-    await sSet('settings', DB.settings);
+    await mutateSettingsSafely(fresh=>{ fresh.lastGuru = rec.guru; });
     toast('Layanan BK tersimpan');
     render();
   }
@@ -3393,6 +3730,7 @@ document.addEventListener('submit', async (e)=>{
       terjadwal: document.getElementById('wwTerjadwal').value.trim(),
       terlayani: document.getElementById('wwTerlayani').value.trim(),
       catatan: document.getElementById('wwCatatan').value.trim(),
+      guru: (activePersonalBK()||{}).nama || DB.settings.lastGuru || '',
       createdAt: Date.now()
     };
     if(!rec.tgl || rec.terjadwal==='' || rec.terlayani===''){ toast('Lengkapi tanggal, jumlah terjadwal, dan jumlah terlayani', true); return; }
@@ -3445,7 +3783,7 @@ document.addEventListener('submit', async (e)=>{
     if(!tglMulai || !tglSelesai || !jenis || !judul){ toast('Lengkapi awal pelaksanaan, akhir pelaksanaan, jenis kegiatan, dan judul/tema kegiatan', true); return; }
     if(tglSelesai < tglMulai){ toast('Akhir pelaksanaan tidak boleh sebelum awal pelaksanaan', true); return; }
     await loadUpgrading();
-    DB.upgrading.push({ id: uid(), tglMulai, tglSelesai, jenis, judul, penyelenggara, catatan, pembicara, createdAt: Date.now() });
+    DB.upgrading.push({ id: uid(), tglMulai, tglSelesai, jenis, judul, penyelenggara, catatan, pembicara, guru: (activePersonalBK()||{}).nama || DB.settings.lastGuru || '', createdAt: Date.now() });
     await saveUpgrading();
     STATE.upgradingPembicara = [''];
     toast('Upgrading Personal BK tersimpan');
@@ -3477,14 +3815,17 @@ document.addEventListener('submit', async (e)=>{
     await loadAdministrasi();
     DB.administrasi.push({ id: uid(), tgl, guru, items, createdAt: Date.now() });
     await saveAdministrasi();
-    DB.settings.lastGuru = guru;
-    await sSet('settings', DB.settings);
+    await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
     toast('Administrasi BK tersimpan');
     render();
   }
 });
 
 document.addEventListener('change', (e)=>{
+  if(e.target.classList && e.target.classList.contains('kelas-ketuntasan-input')){
+    updateKelasCapaianManual(e.target.dataset.kelas, 'ketuntasan', e.target.value.trim());
+    return;
+  }
   if(e.target.id === 'lJenis'){
     const wrap = document.getElementById('lLainnyaWrap');
     if(wrap) wrap.style.display = (e.target.value === 'Lainnya') ? 'flex' : 'none';
@@ -3521,12 +3862,10 @@ document.addEventListener('change', (e)=>{
     updateUnservedSection();
   }
   if(e.target.id === 'namaKepalaSekolahInput'){
-    DB.settings.namaKepalaSekolah = e.target.value.trim();
-    sSet('settings', DB.settings);
+    mutateSettingsSafely(fresh=>{ fresh.namaKepalaSekolah = e.target.value.trim(); });
   }
   if(e.target.id === 'namaWakaKesiswaanInput'){
-    DB.settings.namaWakaKesiswaan = e.target.value.trim();
-    sSet('settings', DB.settings);
+    mutateSettingsSafely(fresh=>{ fresh.namaWakaKesiswaan = e.target.value.trim(); });
   }
   if(e.target.id === 'admFilterKategori'){ STATE.administrasiFilterKategori = e.target.value; render(); }
   if(e.target.id === 'lapKategoriAdm'){ STATE.laporanKategoriAdministrasi = e.target.value; }
@@ -3859,7 +4198,7 @@ function exportLaporanLengkapExcel(){
   toast('Laporan gabungan (Excel) diunduh');
 }
 
-function exportLaporanLengkapPDF(){
+function collectLaporanLengkapSections(){
   const { rows: layananRows } = collectLayananRows(null);
   const { rows: kasusRows } = collectKasusRows(null);
   const { rows: klasikalRows } = collectKlasikalRows('laporan');
@@ -3886,7 +4225,7 @@ function exportLaporanLengkapPDF(){
   const igKelasRows = infoRows.flatMap(r => r.kelasBreakdown.map(kb => ({nama:r.nama, ...kb})));
   const igBidangRows = infoRows.flatMap(r => r.totalBidangFreq>0 ? r.bidangBreakdown.map(bb => ({nama:r.nama, ...bb})) : []);
 
-  const sections = [
+  return [
     { title:'Ringkasan Data', rows:ringkasanRows, head:['Kategori','Jumlah'], body:(r,i)=>[r.label, r.value] },
     { title:'Info Grafis Personal BK', rows:infoRows, head:['Nama Personal BK','Kelas Ditugaskan','Layanan BK','Permasalahan','Klasikal','Home Visit','Total','Jumlah Siswa','Konseling Individu Siswa','% Terlayani'], body:(r,i)=>[r.nama,r.assignedKelas.join(', ')||'-',r.layanan,r.kasus,r.klasikal,r.homeVisit,r.total,r.jumlahSiswaTotal||'-',r.siswaTerlayaniTotal||'-',r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-'] },
     { title:'Info Grafis - Rincian Per Kelas', rows:igKelasRows, head:['Nama Personal BK','Kelas','Jumlah Siswa','Konseling Individu Siswa','% Terlayani','Frekuensi Kasus'], body:(r,i)=>[r.nama,r.kelas,r.jumlahSiswa,r.siswaTerlayani,r.persenTerlayani+'%',r.kasusCount] },
@@ -3900,6 +4239,10 @@ function exportLaporanLengkapPDF(){
     { title:'Wawancara Wali Murid Kelas 7', rows:wwRows, head:['No','Tanggal','Terjadwal','Terlayani','Catatan'], body:(r,i)=>[i+1,fmtDateID(r.tgl),r.terjadwal,r.terlayani,r.catatan] },
     { title:'Upgrading Personal BK', rows:upRows, head:['No','Awal','Akhir','Jenis','Judul/Tema','Penyelenggara','Pembicara','Catatan'], body:(r,i)=>[i+1,fmtDateID(r.tglMulai),fmtDateID(r.tglSelesai),r.jenis,r.judul,r.penyelenggara,r.pembicara,r.catatan] }
   ];
+}
+
+function exportLaporanLengkapPDF(){
+  const sections = collectLaporanLengkapSections();
   const totalAll = sections.reduce((a,s)=>a+s.rows.length,0);
   if(!totalAll){ toast('Tidak ada data pada rentang tanggal/kelas yang dipilih', true); return; }
 
@@ -3924,6 +4267,8 @@ function exportLaporanLengkapPDF(){
     doc.setTextColor(168,50,50);
     doc.text('SANGAT RAHASIA', boxX + boxW/2, boxY + boxH/2 + 4, {align:'center'});
     doc.setLineWidth(1);
+    doc.setTextColor(30,30,30);
+    doc.setFont('helvetica','normal');
   };
 
   try{ doc.addImage(LOGO_ICON, 'PNG', pw/2-40, ph/2-180, 80, 80); }catch(e){}
@@ -3963,7 +4308,7 @@ function exportLaporanLengkapPDF(){
   });
 
   doc.addPage();
-  let y = pdfHeader(doc, 'Daftar Isi Laporan', tahunAjaran + '  |  ' + personalBKInfo + '  |  ' + periode + '  |  ' + kelasInfo);
+  let y = pdfHeader(doc, 'Daftar Isi Laporan', tahunAjaran + '  |  ' + personalBKInfo + '  |  ' + periode + '  |  ' + kelasInfo, [24,97,88]);
   stampRahasiaBox();
   doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
   y += 20;
@@ -3975,7 +4320,7 @@ function exportLaporanLengkapPDF(){
   sections.forEach(s=>{
     if(!s.rows.length) return;
     doc.addPage();
-    const sy = pdfHeader(doc, s.title + ' - SMP Al Hikmah Surabaya', periode);
+    const sy = pdfHeader(doc, s.title + ' - SMP Al Hikmah Surabaya', periode, [24,97,88]);
     doc.autoTable({
       head:[s.head],
       body: s.rows.map((r,i)=>s.body(r,i)),
@@ -4048,6 +4393,66 @@ function exportLaporanLengkapPDF(){
   toast('Laporan gabungan (PDF) diunduh');
 }
 
+async function exportLaporanLengkapWord(){
+  const sections = collectLaporanLengkapSections();
+  const totalAll = sections.reduce((a,s)=>a+s.rows.length,0);
+  if(!totalAll){ toast('Tidak ada data pada rentang tanggal/kelas yang dipilih', true); return; }
+  if(typeof htmlDocx === 'undefined'){ toast('Pustaka Word gagal dimuat. Periksa koneksi internet Anda dan coba lagi.', true); return; }
+
+  const tahunAjaranW = laporanTahunAjaranLabel();
+  const periodeW = laporanPeriodeLabel();
+  const kelasInfoW = laporanKelasLabel();
+  const personalBKInfoW = laporanPersonalBKLabel();
+
+  const th = (t)=>`<th style="background:#0D3B36;color:#fff;padding:6px 8px;border:1px solid #999;font-size:11px;">${esc(t)}</th>`;
+  const td = (t)=>`<td style="padding:6px 8px;border:1px solid #999;font-size:11px;">${esc(String(t==null||t===''?'-':t))}</td>`;
+
+  const sectionsHtml = sections.filter(s=>s.rows.length).map(s=>{
+    const bodyHtml = s.rows.map((r,i)=>`<tr>${s.body(r,i).map(td).join('')}</tr>`).join('');
+    return `<h2 style="color:#0a2e2a;">${esc(s.title)}</h2><table style="border-collapse:collapse;width:100%;margin-bottom:20px;"><tr>${s.head.map(th).join('')}</tr>${bodyHtml}</table>`;
+  }).join('');
+
+  const namaKepsekW = (DB.settings.namaKepalaSekolah || '').trim();
+  const namaWakaW = (DB.settings.namaWakaKesiswaan || '').trim();
+  const namaGuruBKW = ((activePersonalBK()||{}).nama || '-').trim();
+
+  const htmlString = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Calibri,Arial,sans-serif;">
+    <p style="text-align:right;color:#A83232;font-weight:bold;">SANGAT RAHASIA</p>
+    <h1 style="text-align:center;color:#0a2e2a;">Laporan Kinerja Bimbingan dan Konseling</h1>
+    <p style="text-align:center;color:#8A6A24;font-style:italic;">SMP Al Hikmah Full Day School Surabaya</p>
+    <p style="text-align:center;color:#5c5c5c;font-size:12px;">${esc(tahunAjaranW)} | ${esc(personalBKInfoW)} | ${esc(periodeW)} | ${esc(kelasInfoW)}</p>
+    <p style="text-align:center;font-weight:bold;font-size:16px;">Bismillahirrohmanirrohim</p>
+    <p>Assalamu'alaikum warahmatullahi wabarakatuh.</p>
+    ${sectionsHtml}
+    <p>Demikian Laporan Kinerja Bimbingan dan Konseling ini kami susun sebagai bentuk pertanggungjawaban dan evaluasi pelaksanaan program Bimbingan dan Konseling di SMP Al Hikmah Full Day School Surabaya.</p>
+    <p>Semoga laporan ini dapat menjadi bahan pertimbangan dan tindak lanjut yang bermanfaat demi peningkatan mutu layanan bimbingan dan konseling bagi peserta didik di masa yang akan datang. Atas perhatian dan kerja sama yang baik, kami ucapkan terima kasih.</p>
+    <p style="font-weight:bold;">Wassalamu'alaikum warahmatullahi wabarakatuh.</p>
+    <table style="border-collapse:collapse;width:100%;margin-top:40px;"><tr>
+      <td style="width:50%;text-align:center;vertical-align:top;">
+        <p>Wakil Kepala Kesiswaan</p><p>SMP Al Hikmah Full Day School Surabaya</p><br><br><br>
+        <p style="font-weight:bold;">${esc(namaWakaW || '( ..................................... )')}</p>
+      </td>
+      <td style="width:50%;text-align:center;vertical-align:top;">
+        <p>Surabaya, ${esc(fmtDateID(todayISO()))}</p><p>Guru Bimbingan Konseling</p><p>SMP Al Hikmah Full Day School Surabaya</p><br><br><br>
+        <p style="font-weight:bold;">${esc(namaGuruBKW)}</p>
+      </td>
+    </tr></table>
+    <p style="text-align:center;font-weight:bold;margin-top:30px;">Mengetahui,</p>
+    <p style="text-align:center;">Kepala SMP Al Hikmah Full Day School Surabaya</p>
+    <br><br>
+    <p style="text-align:center;font-weight:bold;">${esc(namaKepsekW || '( ..................................... )')}</p>
+  </body></html>`;
+
+  const blob = htmlDocx.asBlob(htmlString);
+  const url = URL.createObjectURL(blob);
+  const a = window.document.createElement('a');
+  a.href = url;
+  a.download = `Laporan_Kinerja_BK_Lengkap_${todayISO()}.docx`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Laporan gabungan (Word) diunduh');
+}
+
 /* ================== HALAMAN KELOLA DATA ================== */
 function computeRingkasanData(){
   const assignedKelasKelola = assignedKelasList();
@@ -4055,12 +4460,15 @@ function computeRingkasanData(){
   const totalLayanan = studentsAssigned.reduce((a,s)=>a+((DB.layanan[s.induk]||[]).length),0);
   const totalKasus = studentsAssigned.reduce((a,s)=>a+((DB.kasus[s.induk]||[]).length),0);
   const totalKlasikal = assignedKelasKelola.reduce((a,k)=>a+((DB.klasikal[k]||[]).length),0);
-  const totalAdministrasi = (DB.administrasi||[]).length;
-  const totalWawancara = (DB.wawancaraWali||[]).length;
-  const totalUpgrading = (DB.upgrading||[]).length;
+  const activeNama = (activePersonalBK()||{}).nama || '';
+  const totalAdministrasi = (DB.administrasi||[]).filter(r => (r.guru||'').trim().toLowerCase() === activeNama.trim().toLowerCase()).length;
+  const totalWawancara = (DB.wawancaraWali||[]).filter(r => (r.guru||'').trim().toLowerCase() === activeNama.trim().toLowerCase()).length;
+  const totalUpgrading = (DB.upgrading||[]).filter(r => (r.guru||'').trim().toLowerCase() === activeNama.trim().toLowerCase()).length;
   const totalHomeVisit = (DB.homeVisit||[]).filter(r=>assignedKelasKelola.includes(r.kelas)).length;
-  const totalPersonalBK = (DB.personalBK||[]).length;
-  return { jumlahSiswa: studentsAssigned.length, totalLayanan, totalKasus, totalKlasikal, totalAdministrasi, totalWawancara, totalUpgrading, totalHomeVisit, totalPersonalBK };
+  const totalPersonalBK = (DB.personalBK||[]).length; // jumlah staf BK di sekolah, bukan data personal
+  const wawancaraBelumAdaGuru = (DB.wawancaraWali||[]).filter(r => !(r.guru||'').trim()).length;
+  const upgradingBelumAdaGuru = (DB.upgrading||[]).filter(r => !(r.guru||'').trim()).length;
+  return { jumlahSiswa: studentsAssigned.length, totalLayanan, totalKasus, totalKlasikal, totalAdministrasi, totalWawancara, totalUpgrading, totalHomeVisit, totalPersonalBK, wawancaraBelumAdaGuru, upgradingBelumAdaGuru };
 }
 
 function computeUnservedStudents(){
@@ -4228,6 +4636,7 @@ async function renderKelola(){
 
     <div class="card">
       <h2>Ringkasan Data</h2>
+      <p class="hint" style="margin-top:-6px;margin-bottom:14px;">Seluruh angka khusus milik Personal BK yang sedang bertugas saat ini (Wawancara Wali Murid &amp; Upgrading Personal BK ikut terpisah otomatis berdasarkan siapa yang mengisi). Catatan lama sebelum pembaruan ini belum tercatat siapa pengisinya, sehingga sementara tidak ikut terhitung sampai diisi ulang. Angka bertanda <b>(Tim)</b> memang bersifat data seluruh sekolah, bukan milik satu orang.</p>
       <div class="grid3">
         <div class="field"><label>Jumlah Siswa</label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalSiswaRK}</div></div>
         <div class="field"><label>Total Catatan Layanan BK</label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalLayanan}</div></div>
@@ -4241,8 +4650,17 @@ async function renderKelola(){
       <div class="grid3">
         <div class="field"><label>Total Upgrading Personal BK</label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalUpgrading}</div></div>
         <div class="field"><label>Total Home Visit</label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalHomeVisit}</div></div>
-        <div class="field"><label>Jumlah Personal BK</label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalPersonalBK}</div></div>
+        <div class="field"><label>Jumlah Personal BK <span class="pill pill-gold" style="font-size:10px;">Tim</span></label><div style="font-size:22px;font-weight:700;color:var(--teal-900);">${totalPersonalBK}</div></div>
       </div>
+      ${(rk.wawancaraBelumAdaGuru + rk.upgradingBelumAdaGuru) > 0 ? `
+      <div class="warnbox" style="margin-top:16px;">
+        <div class="wtitle">&#8505; Ada Catatan Lama Belum Tercatat Pengisinya</div>
+        <div class="wbody">${rk.wawancaraBelumAdaGuru} catatan Wawancara Wali Murid dan ${rk.upgradingBelumAdaGuru} catatan Upgrading Personal BK dibuat sebelum pembaruan sistem ini, sehingga belum tercatat siapa pengisinya. Kalau catatan-catatan itu memang milik Anda (<b>${esc((activePersonalBK()||{}).nama||'')}</b>), klik tombol di bawah ini untuk menetapkannya.</div>
+        <div class="btnrow" style="margin-top:10px;">
+          <button class="btn btn-gold btn-sm" onclick="claimUnattributedRecords()">Tetapkan Catatan Lama ke Saya</button>
+        </div>
+      </div>
+      ` : ''}
     </div>
 
     <div class="card">
@@ -4280,6 +4698,7 @@ async function renderKelola(){
       <div class="btnrow">
         <button class="btn btn-gold" onclick="exportLaporanLengkapExcel()">&#11015; Cetak Excel Gabungan</button>
         <button class="btn btn-gold" onclick="exportLaporanLengkapPDF()">&#11015; Cetak PDF Gabungan</button>
+        <button class="btn btn-gold" onclick="exportLaporanLengkapWord()">&#11015; Cetak Word Gabungan</button>
       </div>
     </div>
 
@@ -4330,6 +4749,29 @@ async function renderKelola(){
       </div>
     </div>
   `;
+}
+
+async function claimUnattributedRecords(){
+  const active = activePersonalBK();
+  if(!active) return;
+  const rk = computeRingkasanData();
+  const totalBelum = rk.wawancaraBelumAdaGuru + rk.upgradingBelumAdaGuru;
+  if(totalBelum === 0){ toast('Tidak ada catatan lama yang perlu ditetapkan', true); return; }
+  const ok = await confirmModal(
+    'Tetapkan Catatan Lama',
+    `Ada <b>${rk.wawancaraBelumAdaGuru} catatan Wawancara Wali Murid</b> dan <b>${rk.upgradingBelumAdaGuru} catatan Upgrading Personal BK</b> yang belum tercatat nama pengisinya. Seluruhnya akan ditetapkan sebagai milik <b>${esc(active.nama)}</b> (Personal BK yang sedang login). Gunakan ini hanya jika Anda yakin seluruh catatan lama tersebut memang milik Anda. Lanjutkan?`,
+    'Ya, Tetapkan ke Saya', true
+  );
+  if(!ok) return;
+  await loadWawancaraWali();
+  await loadUpgrading();
+  DB.wawancaraWali.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = active.nama; });
+  DB.upgrading.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = active.nama; });
+  await saveWawancaraWali();
+  await saveUpgrading();
+  await logActivity(`Menetapkan ${totalBelum} catatan lama (Wawancara/Upgrading) sebagai milik ${esc(active.nama)}`);
+  toast(`${totalBelum} catatan lama ditetapkan sebagai milik ${active.nama}`);
+  render();
 }
 
 async function handleDeleteAll(){
@@ -4419,8 +4861,7 @@ async function startNewAcademicYear(){
   await sSet('home_visit', []);
 
   // 4. Perbarui Tahun Ajaran
-  DB.settings.tahunAjaran = newTahun;
-  await sSet('settings', DB.settings);
+  await mutateSettingsSafely(fresh=>{ fresh.tahunAjaran = newTahun; });
 
   await logActivity(`Menjalankan "Mulai Tahun Ajaran Baru" (${esc(currentTahun)} &rarr; ${esc(newTahun)})`);
   toast(`Tahun ajaran ${newTahun} dimulai. Arsip data lama sudah diunduh.`);
@@ -4440,11 +4881,87 @@ async function deleteKanitBKPairing(){
   const currentKanitP = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
   const ok = await confirmModal('Lepas Peran Kanit BK', `Penetapan Kanit BK${currentKanitP?` (${esc(currentKanitP.nama)})`:''} akan dihapus. Akses ke halaman "Analisis Data Jurnal Konselor" akan tertutup sampai Admin BK menetapkan Kanit BK baru. Lanjutkan?`, 'Lepas', true);
   if(!ok) return;
+  const okSave = await mutateSettingsSafely(fresh=>{ fresh.kanitBKId = ''; fresh.namaKanitBK = ''; });
+  if(!okSave) return;
   await logActivity(`Melepas peran Kanit BK${currentKanitP?` dari ${esc(currentKanitP.nama)}`:''}`);
-  DB.settings.kanitBKId = '';
-  DB.settings.namaKanitBK = '';
-  await sSet('settings', DB.settings);
   toast('Kanit BK dilepas');
+  render();
+}
+
+function buildKelasWaliKelasPanelHtml(){
+  const data = DB.kelasWaliKelas || {};
+  const editingKelas = STATE.editingWaliKelasId;
+  const sudahDipakai = Object.keys(data);
+  const kelasTersedia = editingKelas
+    ? KELAS_LIST.filter(k => !sudahDipakai.includes(k) || k === editingKelas)
+    : KELAS_LIST.filter(k => !sudahDipakai.includes(k));
+  const namaLama = editingKelas ? (data[editingKelas]||'') : '';
+  const rows = Object.keys(data).sort((a,b)=> KELAS_LIST.indexOf(a) - KELAS_LIST.indexOf(b));
+  return `
+    <h2>&#127891; Kelola Kelas &amp; Wali Kelas</h2>
+    <p class="hint" style="margin-top:-6px;margin-bottom:14px;">Data wali kelas dikelola terpusat di sini. Kolom "Wali Kelas" pada "Rekap Capaian Konseling Siswa" (Analisis Data Jurnal Konselor) otomatis mengikuti data ini dan tidak bisa diedit dari sana. Satu kelas hanya boleh punya satu wali kelas.</p>
+    <div class="grid2" style="margin-bottom:14px;">
+      <div class="field">
+        <label>Kelas</label>
+        <select id="waliKelasSelect">
+          <option value="">-- Pilih Kelas --</option>
+          ${kelasTersedia.map(k=>`<option value="${k}" ${k===editingKelas?'selected':''}>${k}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Nama Wali Kelas</label>
+        <input type="text" id="waliKelasNamaInput" value="${esc(namaLama)}" placeholder="Nama lengkap wali kelas">
+      </div>
+    </div>
+    <div class="btnrow" style="margin-bottom:20px;">
+      <button class="btn btn-gold btn-sm" onclick="saveWaliKelasFromForm()">&#10003; ${editingKelas ? 'Simpan Perubahan' : 'Tambah'}</button>
+      ${editingKelas ? `<button class="btn btn-ghost btn-sm" onclick="cancelEditWaliKelas()">Batal</button>` : ''}
+    </div>
+    ${rows.length ? `
+    <div style="overflow-x:auto;">
+    <table class="list">
+      <thead><tr><th>Kelas</th><th>Wali Kelas</th><th>Aksi</th></tr></thead>
+      <tbody>
+        ${rows.map(k=>`<tr>
+          <td class="namecell">${esc(k)}</td>
+          <td>${esc(data[k])}</td>
+          <td><div class="btnrow" style="margin:0;"><button class="btn btn-outline btn-sm" onclick="editWaliKelas('${k}')">Edit</button><button class="btn btn-ghost btn-sm" onclick="removeWaliKelas('${k}')">Hapus</button></div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>` : `<div class="empty">Belum ada wali kelas yang diatur.</div>`}
+  `;
+}
+async function saveWaliKelasFromForm(){
+  const kelas = document.getElementById('waliKelasSelect').value;
+  const nama = document.getElementById('waliKelasNamaInput').value.trim();
+  if(!kelas){ toast('Pilih kelas terlebih dahulu', true); return; }
+  if(!nama){ toast('Isi nama wali kelas terlebih dahulu', true); return; }
+  const editingKelasLama = STATE.editingWaliKelasId;
+  const ok = await saveKelasWaliKelasEntry(kelas, nama, editingKelasLama);
+  if(!ok) return;
+  await logActivity(`Menetapkan ${esc(nama)} sebagai wali kelas ${esc(kelas)}`);
+  STATE.editingWaliKelasId = null;
+  toast(`Wali kelas ${kelas} disimpan`);
+  render();
+}
+function editWaliKelas(kelas){
+  STATE.editingWaliKelasId = kelas;
+  render();
+}
+function cancelEditWaliKelas(){
+  STATE.editingWaliKelasId = null;
+  render();
+}
+async function removeWaliKelas(kelas){
+  const nama = (DB.kelasWaliKelas||{})[kelas] || '';
+  const ok = await confirmModal('Hapus Wali Kelas', `Data wali kelas <b>${esc(nama)}</b> untuk kelas <b>${esc(kelas)}</b> akan dihapus. Lanjutkan?`, 'Hapus', true);
+  if(!ok) return;
+  const okDel = await deleteKelasWaliKelasEntry(kelas);
+  if(!okDel) return;
+  await logActivity(`Menghapus data wali kelas ${esc(kelas)} (${esc(nama)})`);
+  if(STATE.editingWaliKelasId === kelas) STATE.editingWaliKelasId = null;
+  toast('Wali kelas dihapus');
   render();
 }
 
@@ -4494,6 +5011,7 @@ function buildPasswordControlPanelHtml(){
 async function renderPengontrolSistemKataSandi(){
   await ensureAllLoaded();
   await loadActivityLog(true);
+  await loadKelasWaliKelas(true);
   if(!isCurrentUserAdminBK()){
     return `
       <div class="pagehead">
@@ -4520,6 +5038,10 @@ async function renderPengontrolSistemKataSandi(){
     </div>
     <div class="card">
       ${buildPasswordControlPanelHtml()}
+    </div>
+
+    <div class="card">
+      ${buildKelasWaliKelasPanelHtml()}
     </div>
 
     <div class="card" style="border:1.5px solid var(--gold-500);background:var(--gold-100);">
@@ -4580,14 +5102,16 @@ function buildActivityLogHtml(){
   `;
 }
 async function setAdminBK(id){
-  if(id === DB.settings.kanitBKId){
+  const freshCheck = await sGet('settings');
+  const currentKanitId = (freshCheck && freshCheck.kanitBKId) || DB.settings.kanitBKId;
+  if(id === currentKanitId){
     toast('Kanit BK tidak bisa merangkap sebagai Admin BK. Lepas peran Kanit BK-nya terlebih dahulu, atau pilih Personal BK lain.', true);
     return;
   }
   const p = (DB.personalBK||[]).find(x=>x.id===id);
   if(!p) return;
-  DB.settings.adminBKId = id;
-  await sSet('settings', DB.settings);
+  const okSave = await mutateSettingsSafely(fresh=>{ fresh.adminBKId = id; });
+  if(!okSave) return;
   await logActivity(`Menetapkan ${esc(p.nama)} sebagai Admin BK`);
   toast(`${p.nama} ditetapkan sebagai Admin BK`);
   render();
@@ -4596,22 +5120,23 @@ async function removeAdminBK(){
   const p = (DB.personalBK||[]).find(x=>x.id===DB.settings.adminBKId);
   const ok = await confirmModal('Lepas Peran Admin BK', `Penetapan Admin BK${p?` (${esc(p.nama)})`:''} akan dikosongkan. <b>Setelah ini, halaman "Pengontrol Sistem Kata Sandi" tidak akan bisa diakses siapa pun</b> sampai Anda memilih Admin BK baru melalui menu ini sebelum keluar. Yakin ingin melanjutkan?`, 'Lepas', true);
   if(!ok) return;
-  DB.settings.adminBKId = '';
-  await sSet('settings', DB.settings);
+  const okSave = await mutateSettingsSafely(fresh=>{ fresh.adminBKId = ''; });
+  if(!okSave) return;
   await logActivity(`Melepas peran Admin BK${p?` dari ${esc(p.nama)}`:''}`);
   toast('Admin BK dilepas');
   render();
 }
 async function setKanitBKRole(id){
-  if(id === DB.settings.adminBKId){
+  const freshCheck = await sGet('settings');
+  const currentAdminId = (freshCheck && freshCheck.adminBKId) || DB.settings.adminBKId;
+  if(id === currentAdminId){
     toast('Admin BK tidak bisa merangkap sebagai Kanit BK. Lepas peran Admin BK-nya terlebih dahulu, atau pilih Personal BK lain.', true);
     return;
   }
   const p = (DB.personalBK||[]).find(x=>x.id===id);
   if(!p) return;
-  DB.settings.kanitBKId = id;
-  DB.settings.namaKanitBK = p.nama;
-  await sSet('settings', DB.settings);
+  const okSave = await mutateSettingsSafely(fresh=>{ fresh.kanitBKId = id; fresh.namaKanitBK = p.nama; });
+  if(!okSave) return;
   await logActivity(`Menetapkan ${esc(p.nama)} sebagai Kanit BK`);
   toast(`${p.nama} ditetapkan sebagai Kanit BK`);
   render();
@@ -4625,9 +5150,8 @@ async function resetPersonalBKKelasTugas(id){
   if(!p) return;
   const ok = await confirmModal('Reset Kelas Tugas', `Seluruh kelas yang ditugaskan dan jumlah siswa milik <b>${esc(p.nama)}</b> akan dihapus. Personal BK ini akan diminta mengisi ulang kelas tugas &amp; jumlah siswa saat login berikutnya. Lanjutkan?`, 'Reset Kelas Tugas', true);
   if(!ok) return;
-  p.kelasTugas = [];
-  p.jumlahSiswaKelas = {};
-  await savePersonalBK();
+  const result = await mutatePersonalBKSafely(id, fresh=>{ fresh.kelasTugas = []; fresh.jumlahSiswaKelas = {}; });
+  if(!result) return;
   await logActivity(`Reset kelas tugas milik ${esc(p.nama)}`);
   toast(`Kelas tugas ${p.nama} telah direset`);
   render();
@@ -4637,8 +5161,8 @@ async function resetPersonalBKPassword(id){
   if(!p) return;
   const ok = await confirmModal('Reset Kata Sandi Personal BK', `Kata sandi milik <b>${esc(p.nama)}</b> akan dihapus. Saat berikutnya memilih identitas ini, akan diminta membuat kata sandi baru. Lanjutkan?`, 'Reset Kata Sandi', true);
   if(!ok) return;
-  p.passwordHash = '';
-  await savePersonalBK();
+  const result = await mutatePersonalBKSafely(id, fresh=>{ fresh.passwordHash = ''; });
+  if(!result) return;
   await logActivity(`Reset kata sandi milik ${esc(p.nama)}`);
   toast(`Kata sandi ${p.nama} telah direset`);
   render();
@@ -4646,6 +5170,8 @@ async function resetPersonalBKPassword(id){
 
 async function renderAnalisisData(){
   await ensureAllLoaded();
+  await loadKelasCapaianManual(true);
+  await loadKelasWaliKelas(true);
   if(!isCurrentUserKanitBK()){
     return `
       <div class="pagehead">
@@ -4687,7 +5213,7 @@ async function renderAnalisisData(){
 
     <div class="warnbox">
       <div class="wtitle">&#8505; Tentang Halaman Ini</div>
-      <div class="wbody">Data Layanan BK, Permasalahan Siswa, Layanan Klasikal BK, dan Home Visit dihitung berdasarkan kelas yang ditugaskan ke masing-masing Personal BK. Data Administrasi BK dicocokkan berdasarkan nama Guru BK yang tercatat pada setiap kegiatan. Wawancara Wali Murid Kelas 7 (${totalWawancara} kegiatan) dan Upgrading Personal BK (${totalUpgrading} kegiatan) bersifat kegiatan bersama tim BK sehingga belum dapat dipetakan ke personal tertentu &mdash; ditampilkan sebagai total tim di Ringkasan Data.</div>
+      <div class="wbody">Data Layanan BK, Permasalahan Siswa, Layanan Klasikal BK, dan Home Visit dihitung berdasarkan kelas yang ditugaskan ke masing-masing Personal BK. Data Administrasi BK, Wawancara Wali Murid Kelas 7, dan Upgrading Personal BK dicocokkan berdasarkan nama Guru BK yang mengisi catatan tersebut. Catatan lama sebelum pembaruan sistem ini (total ${totalWawancara} kegiatan Wawancara &amp; ${totalUpgrading} kegiatan Upgrading tercatat) mungkin belum menyimpan nama pengisinya, sehingga tampil sebagai kegiatan tim di Ringkasan Data sampai diisi ulang.</div>
     </div>
 
     <div class="footer-note" style="margin-bottom:14px;">&#128100; Anda masuk sebagai Kanit BK: <b>${esc(namaKanitAktif)}</b> &mdash; penetapan ini hanya dapat diubah oleh Admin BK melalui halaman "Pengontrol Sistem Kata Sandi".</div>
@@ -4718,7 +5244,19 @@ async function renderAnalisisData(){
 
     <div class="card">
       <h2>Tabel Perbandingan Lengkap</h2>
-      ${buildComparisonTableHtml(rows)}
+      ${buildComparisonTableHtml(rows, totalUpgrading)}
+    </div>
+
+    <div class="card">
+      <h2>&#128202; Prosentase Bidang BK per Personal BK</h2>
+      <p class="hint" style="margin-top:-6px;margin-bottom:12px;">Proporsi penanganan tiap Bidang BK (Pribadi/Sosial/Belajar/Karir) dari seluruh Layanan BK dan Permasalahan Siswa yang ditangani masing-masing Personal BK.</p>
+      ${buildBidangBKComparisonTableHtml(rows)}
+    </div>
+
+    <div class="card">
+      <h2>&#128202; Rekap Capaian Konseling Siswa per Kelas</h2>
+      <p class="hint" style="margin-top:-6px;margin-bottom:12px;">Kolom "Wali Kelas" dan "Ketuntasan" diisi manual. Kolom "Personal BK" otomatis mengikuti siapa yang mencentang kelas tersebut sebagai tugasnya.</p>
+      ${buildKelasCapaianTableHtml()}
     </div>
 
     <div class="card">
@@ -4732,6 +5270,7 @@ async function renderAnalisisData(){
       <div class="btnrow" style="margin-bottom:12px;">
         <button class="btn btn-outline btn-sm" onclick="exportAnalisisExcel()">&#11015; Cetak Excel</button>
         <button class="btn btn-outline btn-sm" onclick="exportAnalisisPDF()">&#11015; Cetak PDF Raport Lengkap</button>
+        <button class="btn btn-outline btn-sm" onclick="exportAnalisisWord()">&#11015; Cetak Word</button>
       </div>
       <div id="analisisRaportSection">${buildRaportKinerjaHtml(rows)}</div>
     </div>
@@ -4822,13 +5361,53 @@ function buildComparisonBarsHtml(rows){
   }).join('');
 }
 
-function buildComparisonTableHtml(rows){
+function buildBidangBKComparisonTableHtml(rows){
+  const rowsWithData = rows.filter(r=>r.totalBidangFreq>0);
+  if(!rowsWithData.length){
+    return `<div class="empty">Belum ada data Bidang BK yang tercatat.</div>`;
+  }
+  const getBidang = (r, b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
   return `
   <div style="overflow-x:auto;">
   <table class="list">
-    <thead><tr><th>Nama Personal BK</th><th>Kelas Ditugaskan</th><th>Layanan BK</th><th>Permasalahan</th><th>Klasikal</th><th>Home Visit</th><th>Administrasi BK</th><th>Total</th><th>Jumlah Siswa</th><th>% Terlayani</th></tr></thead>
+    <thead><tr><th>Nama Personal BK</th><th>Bidang Pribadi</th><th>Bidang Sosial</th><th>Bidang Belajar</th><th>Bidang Karir</th><th>Total Frekuensi</th></tr></thead>
     <tbody>
-      ${rows.map(r=>`<tr>
+      ${rowsWithData.map(r=>{
+        const pribadi = getBidang(r, 'Bidang Pribadi');
+        const sosial = getBidang(r, 'Bidang Sosial');
+        const belajar = getBidang(r, 'Bidang Belajar');
+        const karir = getBidang(r, 'Bidang Karir');
+        return `<tr>
+          <td class="namecell">${esc(r.nama)}</td>
+          <td>${pribadi.persen}% <span class="hint">(${pribadi.frekuensi})</span></td>
+          <td>${sosial.persen}% <span class="hint">(${sosial.frekuensi})</span></td>
+          <td>${belajar.persen}% <span class="hint">(${belajar.frekuensi})</span></td>
+          <td>${karir.persen}% <span class="hint">(${karir.frekuensi})</span></td>
+          <td><b>${r.totalBidangFreq}</b></td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+function buildComparisonTableHtml(rows, totalUpgrading){
+  const getBidang = (r, b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
+  return `
+  <div style="overflow-x:auto;">
+  <table class="list">
+    <thead><tr>
+      <th>Nama Personal BK</th><th>Kelas Ditugaskan</th><th>Layanan BK</th><th>Permasalahan</th><th>Klasikal</th><th>Home Visit</th><th>Administrasi BK</th><th>Total</th><th>Jumlah Siswa</th><th>% Terlayani</th>
+      <th>Upgrading Personal BK<br><span style="font-weight:400;font-size:10.5px;">(total tim)</span></th>
+      <th>Bidang Pribadi</th><th>Bidang Sosial</th><th>Bidang Belajar</th><th>Bidang Karir</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r=>{
+        const pribadi = getBidang(r, 'Bidang Pribadi');
+        const sosial = getBidang(r, 'Bidang Sosial');
+        const belajar = getBidang(r, 'Bidang Belajar');
+        const karir = getBidang(r, 'Bidang Karir');
+        return `<tr>
         <td class="namecell">${esc(r.nama)}</td>
         <td>${esc(r.assignedKelas.join(', ')||'-')}</td>
         <td>${r.layanan}</td>
@@ -4839,10 +5418,17 @@ function buildComparisonTableHtml(rows){
         <td><b>${r.total + r.administrasiCount}</b></td>
         <td>${r.jumlahSiswaTotal||'-'}</td>
         <td>${r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-'}</td>
-      </tr>`).join('')}
+        <td>${totalUpgrading||0}</td>
+        <td>${r.totalBidangFreq>0 ? `${pribadi.persen}% (${pribadi.frekuensi})` : '-'}</td>
+        <td>${r.totalBidangFreq>0 ? `${sosial.persen}% (${sosial.frekuensi})` : '-'}</td>
+        <td>${r.totalBidangFreq>0 ? `${belajar.persen}% (${belajar.frekuensi})` : '-'}</td>
+        <td>${r.totalBidangFreq>0 ? `${karir.persen}% (${karir.frekuensi})` : '-'}</td>
+      </tr>`;
+      }).join('')}
     </tbody>
   </table>
-  </div>`;
+  </div>
+  <p class="hint" style="margin-top:8px;">Kolom "Upgrading Personal BK" menunjukkan total kegiatan tim (belum bisa dipetakan ke personal tertentu, karena catatan kegiatan ini tidak menyimpan siapa pelakunya).</p>`;
 }
 
 function generatePersonalBKInsights(row, allRows){
@@ -4938,15 +5524,40 @@ function toggleAnalisisRaport(id){
 function exportAnalisisExcel(){
   const rows = collectAllPersonalBKAnalysis();
   if(!rows.length){ toast('Tidak ada data untuk dicetak', true); return; }
+  const totalUpgradingExcel = (DB.upgrading||[]).length;
+  const getBidangExcel = (r, b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
   const wb = XLSX.utils.book_new();
+
+  const aoaOpen = [
+    ['Bismillahirrohmanirrohim'], [],
+    ["Assalamu'alaikum warahmatullahi wabarakatuh."], [],
+    ['Puji syukur kami panjatkan kehadirat Allah SWT, atas rahmat dan karunia-Nya, Analisis Data Jurnal Konselor ini dapat tersusun. Laporan ini disusun sebagai bahan evaluasi dan pemetaan kinerja Personal BK dalam melaksanakan layanan Bimbingan dan Konseling di SMP Al Hikmah Full Day School Surabaya.']
+  ];
+  const wsOpen = XLSX.utils.aoa_to_sheet(aoaOpen);
+  wsOpen['!cols'] = [{wch:110}];
+  XLSX.utils.book_append_sheet(wb, wsOpen, 'Narasi Pembuka');
+
   const headerRow1 = [];
   headerRow1[0] = 'ANALISIS DATA JURNAL KONSELOR — SMP AL HIKMAH SURABAYA';
-  headerRow1[10] = 'SANGAT RAHASIA';
+  headerRow1[15] = 'SANGAT RAHASIA';
   let aoa = [headerRow1, [laporanTahunAjaranLabel()], []];
-  aoa.push(['Nama Personal BK','Kelas Ditugaskan','Layanan BK','Permasalahan','Klasikal','Home Visit','Administrasi BK','Total','Jumlah Siswa','Konseling Individu Siswa','% Terlayani']);
-  rows.forEach(r=> aoa.push([r.nama, r.assignedKelas.join(', ')||'-', r.layanan, r.kasus, r.klasikal, r.homeVisit, r.administrasiCount, r.total+r.administrasiCount, r.jumlahSiswaTotal||'-', r.siswaTerlayaniTotal||'-', r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-']));
+  aoa.push(['Nama Personal BK','Kelas Ditugaskan','Layanan BK','Permasalahan','Klasikal','Home Visit','Administrasi BK','Total','Jumlah Siswa','Konseling Individu Siswa','% Terlayani','Upgrading Personal BK (total tim)','Bidang Pribadi','Bidang Sosial','Bidang Belajar','Bidang Karir']);
+  rows.forEach(r=>{
+    const pribadi = getBidangExcel(r, 'Bidang Pribadi');
+    const sosial = getBidangExcel(r, 'Bidang Sosial');
+    const belajar = getBidangExcel(r, 'Bidang Belajar');
+    const karir = getBidangExcel(r, 'Bidang Karir');
+    aoa.push([
+      r.nama, r.assignedKelas.join(', ')||'-', r.layanan, r.kasus, r.klasikal, r.homeVisit, r.administrasiCount, r.total+r.administrasiCount, r.jumlahSiswaTotal||'-', r.siswaTerlayaniTotal||'-', r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-',
+      totalUpgradingExcel,
+      r.totalBidangFreq>0 ? `${pribadi.persen}% (${pribadi.frekuensi})` : '-',
+      r.totalBidangFreq>0 ? `${sosial.persen}% (${sosial.frekuensi})` : '-',
+      r.totalBidangFreq>0 ? `${belajar.persen}% (${belajar.frekuensi})` : '-',
+      r.totalBidangFreq>0 ? `${karir.persen}% (${karir.frekuensi})` : '-'
+    ]);
+  });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:28},{wch:34},{wch:12},{wch:12},{wch:10},{wch:11},{wch:16},{wch:9},{wch:12},{wch:22},{wch:11}];
+  ws['!cols'] = [{wch:28},{wch:34},{wch:12},{wch:12},{wch:10},{wch:11},{wch:16},{wch:9},{wch:12},{wch:22},{wch:11},{wch:24},{wch:18},{wch:18},{wch:18},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws, 'Perbandingan Personal BK');
 
   const headerRow2 = [];
@@ -4961,6 +5572,62 @@ function exportAnalisisExcel(){
   const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
   ws2['!cols'] = [{wch:28},{wch:50},{wch:50}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Kelebihan & Kekurangan');
+
+  const headerRow3 = [];
+  headerRow3[0] = 'PROSENTASE BIDANG BK PER PERSONAL BK';
+  headerRow3[5] = 'SANGAT RAHASIA';
+  let aoa3 = [headerRow3, []];
+  aoa3.push(['Nama Personal BK','Bidang Pribadi','Bidang Sosial','Bidang Belajar','Bidang Karir','Total Frekuensi']);
+  rows.filter(r=>r.totalBidangFreq>0).forEach(r=>{
+    const getBidang = (b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
+    const pribadi = getBidang('Bidang Pribadi');
+    const sosial = getBidang('Bidang Sosial');
+    const belajar = getBidang('Bidang Belajar');
+    const karir = getBidang('Bidang Karir');
+    aoa3.push([r.nama, `${pribadi.persen}% (${pribadi.frekuensi})`, `${sosial.persen}% (${sosial.frekuensi})`, `${belajar.persen}% (${belajar.frekuensi})`, `${karir.persen}% (${karir.frekuensi})`, r.totalBidangFreq]);
+  });
+  const ws3 = XLSX.utils.aoa_to_sheet(aoa3);
+  ws3['!cols'] = [{wch:28},{wch:20},{wch:20},{wch:20},{wch:20},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, ws3, 'Prosentase Bidang BK');
+
+  const kelasRowsExcel = collectKelasCapaianRows();
+  const manualExcel = DB.kelasCapaianManual || {};
+  const headerRow5 = [];
+  headerRow5[0] = 'REKAP CAPAIAN KONSELING SISWA PER KELAS';
+  headerRow5[8] = 'SANGAT RAHASIA';
+  let aoa5 = [headerRow5, [laporanTahunAjaranLabel()], []];
+  aoa5.push(['No','Kelas','Jumlah Siswa','Konseling','Belum','% Capaian','Ketuntasan','Wali Kelas','Personal BK']);
+  const waliKelasExcel = DB.kelasWaliKelas || {};
+  let totalSiswaExcel=0, totalKonselingExcel=0, totalBelumExcel=0;
+  kelasRowsExcel.forEach((r,i)=>{
+    totalSiswaExcel += r.jumlahSiswa; totalKonselingExcel += r.terkonseling; totalBelumExcel += r.belum;
+    const m = manualExcel[r.kelas] || { ketuntasan:'' };
+    aoa5.push([i+1, r.kelas, r.jumlahSiswa, r.terkonseling, r.belum, r.persenCapaian+'%', m.ketuntasan || '-', waliKelasExcel[r.kelas] || '-', r.personalBK]);
+  });
+  const totalPersenExcel = totalSiswaExcel>0 ? Math.round((totalKonselingExcel/totalSiswaExcel)*1000)/10 : 0;
+  aoa5.push(['','JUMLAH & PROSENTASE', totalSiswaExcel, totalKonselingExcel, totalBelumExcel, totalPersenExcel+'%', '', '', '']);
+  const ws5 = XLSX.utils.aoa_to_sheet(aoa5);
+  ws5['!cols'] = [{wch:5},{wch:10},{wch:14},{wch:12},{wch:10},{wch:12},{wch:20},{wch:28},{wch:28}];
+  XLSX.utils.book_append_sheet(wb, ws5, 'Rekap Capaian Konseling');
+
+  const namaWakaExcel = (DB.settings.namaWakaKesiswaan || '').trim();
+  const kanitPExcel = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
+  const namaKanitExcel = kanitPExcel ? kanitPExcel.nama : '-';
+  const aoa4 = [];
+  aoa4.push(['Demikian Analisis Data Jurnal Konselor ini kami sampaikan sebagai bahan evaluasi dan pertimbangan pengambilan kebijakan terkait kinerja Bimbingan dan Konseling. Atas perhatian dan kerja sama yang baik, kami ucapkan terima kasih.']);
+  aoa4.push([]);
+  aoa4.push(["Wassalamu'alaikum warahmatullahi wabarakatuh."]);
+  aoa4.push([]);
+  aoa4.push([]);
+  const rowSurabaya = aoa4.length; aoa4.push([]); aoa4[rowSurabaya][3] = 'Surabaya, ' + fmtDateID(todayISO());
+  aoa4.push(['Wakil Kepala Kesiswaan']); aoa4[aoa4.length-1][3] = 'Kanit BK';
+  aoa4.push(['SMP Al Hikmah Full Day School Surabaya']); aoa4[aoa4.length-1][3] = 'SMP Al Hikmah Full Day School Surabaya';
+  aoa4.push([]);
+  aoa4.push([]);
+  aoa4.push([namaWakaExcel || '( ..................................... )']); aoa4[aoa4.length-1][3] = namaKanitExcel;
+  const ws4 = XLSX.utils.aoa_to_sheet(aoa4);
+  ws4['!cols'] = [{wch:34},{wch:6},{wch:6},{wch:34}];
+  XLSX.utils.book_append_sheet(wb, ws4, 'Tanda Tangan');
 
   XLSX.writeFile(wb, `Analisis_Data_Jurnal_Konselor_${todayISO()}.xlsx`);
   toast('Berkas Excel diunduh');
@@ -4977,16 +5644,48 @@ function exportAnalisisPDF(){
     doc.setFontSize(11);
     doc.setTextColor(168,50,50);
     doc.text('SANGAT RAHASIA', pw-40, 24, {align:'right'});
+    doc.setTextColor(30,30,30);
+    doc.setFont('helvetica','normal');
   };
+
+  // ===== Halaman Narasi Pembuka =====
+  const pwOpen = doc.internal.pageSize.getWidth();
+  const marginXOpen = 60;
+  const textWidthOpen = pwOpen - marginXOpen*2;
+  stampRahasia();
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(10,46,42);
+  doc.text('Bismillahirrohmanirrohim', pwOpen/2, 90, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
+  doc.text("Assalamu'alaikum warahmatullahi wabarakatuh.", marginXOpen, 130);
+  const openingPara = "Puji syukur kami panjatkan kehadirat Allah SWT, atas rahmat dan karunia-Nya, Analisis Data Jurnal Konselor ini dapat tersusun. Laporan ini disusun sebagai bahan evaluasi dan pemetaan kinerja Personal BK dalam melaksanakan layanan Bimbingan dan Konseling di SMP Al Hikmah Full Day School Surabaya.";
+  const openingLines = doc.splitTextToSize(openingPara, textWidthOpen);
+  doc.text(openingLines, marginXOpen, 160);
+
+  doc.addPage();
   let y = pdfHeader(doc, 'Analisis Data Jurnal Konselor - SMP Al Hikmah Surabaya', laporanTahunAjaranLabel());
   stampRahasia();
+  const totalUpgradingPdf = (DB.upgrading||[]).length;
+  const getBidangPdf = (r, b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
   doc.autoTable({
-    head:[['Nama Personal BK','Kelas Ditugaskan','Layanan BK','Permasalahan','Klasikal','Home Visit','Administrasi BK','Total','Jumlah Siswa','Terlayani','% Terlayani']],
-    body: rows.map(r=>[r.nama, r.assignedKelas.join(', ')||'-', r.layanan, r.kasus, r.klasikal, r.homeVisit, r.administrasiCount, r.total+r.administrasiCount, r.jumlahSiswaTotal||'-', r.siswaTerlayaniTotal||'-', r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-']),
-    startY: y+8, styles:{fontSize:8.5, cellPadding:5, valign:'top'},
-    headStyles:{fillColor:[13,59,54], textColor:255},
-    columnStyles:{0:{cellWidth:90},1:{cellWidth:120}},
-    margin:{left:40,right:40},
+    head:[['Nama Personal BK','Kelas Ditugaskan','Layanan BK','Permasalahan','Klasikal','Home Visit','Administrasi BK','Total','Jumlah Siswa','Terlayani','% Terlayani','Upgrading (Tim)','Bidang Pribadi','Bidang Sosial','Bidang Belajar','Bidang Karir']],
+    body: rows.map(r=>{
+      const pribadi = getBidangPdf(r, 'Bidang Pribadi');
+      const sosial = getBidangPdf(r, 'Bidang Sosial');
+      const belajar = getBidangPdf(r, 'Bidang Belajar');
+      const karir = getBidangPdf(r, 'Bidang Karir');
+      return [
+        r.nama, r.assignedKelas.join(', ')||'-', r.layanan, r.kasus, r.klasikal, r.homeVisit, r.administrasiCount, r.total+r.administrasiCount, r.jumlahSiswaTotal||'-', r.siswaTerlayaniTotal||'-', r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-',
+        totalUpgradingPdf,
+        r.totalBidangFreq>0 ? `${pribadi.persen}% (${pribadi.frekuensi})` : '-',
+        r.totalBidangFreq>0 ? `${sosial.persen}% (${sosial.frekuensi})` : '-',
+        r.totalBidangFreq>0 ? `${belajar.persen}% (${belajar.frekuensi})` : '-',
+        r.totalBidangFreq>0 ? `${karir.persen}% (${karir.frekuensi})` : '-'
+      ];
+    }),
+    startY: y+8, styles:{fontSize:6.8, cellPadding:3.5, valign:'top'},
+    headStyles:{fillColor:[13,59,54], textColor:255, fontSize:6.8},
+    columnStyles:{0:{cellWidth:78},1:{cellWidth:85}},
+    margin:{left:20,right:20},
     didDrawPage: stampRahasia
   });
 
@@ -5006,8 +5705,155 @@ function exportAnalisisPDF(){
     didDrawPage: stampRahasia
   });
 
+  doc.addPage();
+  const y3 = pdfHeader(doc, 'Prosentase Bidang BK per Personal BK', laporanTahunAjaranLabel());
+  stampRahasia();
+  doc.autoTable({
+    head:[['Nama Personal BK','Bidang Pribadi','Bidang Sosial','Bidang Belajar','Bidang Karir','Total Frekuensi']],
+    body: rows.filter(r=>r.totalBidangFreq>0).map(r=>{
+      const getBidang = (b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
+      const pribadi = getBidang('Bidang Pribadi');
+      const sosial = getBidang('Bidang Sosial');
+      const belajar = getBidang('Bidang Belajar');
+      const karir = getBidang('Bidang Karir');
+      return [r.nama, `${pribadi.persen}% (${pribadi.frekuensi})`, `${sosial.persen}% (${sosial.frekuensi})`, `${belajar.persen}% (${belajar.frekuensi})`, `${karir.persen}% (${karir.frekuensi})`, r.totalBidangFreq];
+    }),
+    startY: y3+8, styles:{fontSize:8.5, cellPadding:5, valign:'top'},
+    headStyles:{fillColor:[13,59,54], textColor:255},
+    columnStyles:{0:{cellWidth:110}},
+    margin:{left:40,right:40},
+    didDrawPage: stampRahasia
+  });
+
+  doc.addPage();
+  const y4 = pdfHeader(doc, 'Rekap Capaian Konseling Siswa per Kelas', laporanTahunAjaranLabel());
+  stampRahasia();
+  const kelasRowsPdf = collectKelasCapaianRows();
+  const manualPdf = DB.kelasCapaianManual || {};
+  const waliKelasPdf = DB.kelasWaliKelas || {};
+  let totalSiswaPdf=0, totalKonselingPdf=0, totalBelumPdf=0;
+  const kelasBodyPdf = kelasRowsPdf.map((r,i)=>{
+    totalSiswaPdf += r.jumlahSiswa; totalKonselingPdf += r.terkonseling; totalBelumPdf += r.belum;
+    const m = manualPdf[r.kelas] || { ketuntasan:'' };
+    return [i+1, r.kelas, r.jumlahSiswa, r.terkonseling, r.belum, r.persenCapaian+'%', m.ketuntasan || '-', waliKelasPdf[r.kelas] || '-', r.personalBK];
+  });
+  const totalPersenPdf = totalSiswaPdf>0 ? Math.round((totalKonselingPdf/totalSiswaPdf)*1000)/10 : 0;
+  kelasBodyPdf.push(['', 'JUMLAH & PROSENTASE', totalSiswaPdf, totalKonselingPdf, totalBelumPdf, totalPersenPdf+'%', '', '', '']);
+  doc.autoTable({
+    head:[['No','Kelas','Jumlah Siswa','Konseling','Belum','% Capaian','Ketuntasan','Wali Kelas','Personal BK']],
+    body: kelasBodyPdf,
+    startY: y4+8, styles:{fontSize:8.5, cellPadding:5, valign:'top'},
+    headStyles:{fillColor:[13,59,54], textColor:255},
+    columnStyles:{0:{cellWidth:30},1:{cellWidth:50}},
+    margin:{left:40,right:40},
+    didDrawPage: stampRahasia
+  });
+
+  // ===== Halaman Tanda Tangan (didahului narasi penutup) =====
+  const namaWaka = (DB.settings.namaWakaKesiswaan || '').trim();
+  const kanitPForSign = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
+  const namaKanitSign = kanitPForSign ? kanitPForSign.nama : '-';
+
+  doc.addPage();
+  const pw2 = doc.internal.pageSize.getWidth();
+  const marginX2 = 60;
+  const textWidth2 = pw2 - marginX2*2;
+  stampRahasia();
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(30,30,30);
+  let closeY = 70;
+  const closingPara = "Demikian Analisis Data Jurnal Konselor ini kami sampaikan sebagai bahan evaluasi dan pertimbangan pengambilan kebijakan terkait kinerja Bimbingan dan Konseling. Atas perhatian dan kerja sama yang baik, kami ucapkan terima kasih.";
+  const closingLines = doc.splitTextToSize(closingPara, textWidth2);
+  doc.text(closingLines, marginX2, closeY);
+  closeY += closingLines.length * 16 + 14;
+  doc.setFont('helvetica','bold');
+  doc.text("Wassalamu'alaikum warahmatullahi wabarakatuh.", marginX2, closeY);
+  doc.setFont('helvetica','normal');
+
+  let sy = closeY + 60;
+  const colW2 = textWidth2/2;
+  const colLeft = marginX2 + colW2*0.5;
+  const colRight = marginX2 + colW2*1.5;
+
+  doc.text('Wakil Kepala Kesiswaan', colLeft, sy, {align:'center'});
+  doc.text('SMP Al Hikmah Full Day School Surabaya', colLeft, sy+16, {align:'center'});
+
+  doc.text('Surabaya, ' + fmtDateID(todayISO()), colRight, sy-18, {align:'center'});
+  doc.text('Kanit BK', colRight, sy, {align:'center'});
+  doc.text('SMP Al Hikmah Full Day School Surabaya', colRight, sy+16, {align:'center'});
+
+  const nameY2 = sy + 100;
+  doc.setFont('helvetica','bold');
+  doc.text(namaWaka || '( ..................................... )', colLeft, nameY2, {align:'center'});
+  doc.text(namaKanitSign, colRight, nameY2, {align:'center'});
+  doc.setFont('helvetica','normal');
+
   doc.save(`Analisis_Data_Jurnal_Konselor_${todayISO()}.pdf`);
   toast('Berkas PDF diunduh');
+}
+
+async function exportAnalisisWord(){
+  const rows = collectAllPersonalBKAnalysis();
+  if(!rows.length){ toast('Tidak ada data untuk dicetak', true); return; }
+  if(typeof htmlDocx === 'undefined'){ toast('Pustaka Word gagal dimuat. Periksa koneksi internet Anda dan coba lagi.', true); return; }
+
+  const totalUpgradingW = (DB.upgrading||[]).length;
+  const getBidangW = (r, b) => (r.bidangBreakdown||[]).find(x=>x.bidang===b) || {frekuensi:0, persen:0};
+  const th = (t)=>`<th style="background:#0D3B36;color:#fff;padding:6px 8px;border:1px solid #999;font-size:11px;">${esc(t)}</th>`;
+  const td = (t,bold)=>`<td style="padding:6px 8px;border:1px solid #999;font-size:11px;${bold?'font-weight:bold;':''}">${esc(String(t==null||t===''?'-':t))}</td>`;
+
+  const mainHead = ['Nama Personal BK','Kelas','Layanan BK','Permasalahan','Klasikal','Home Visit','Administrasi','Total','Jml Siswa','% Terlayani','Upgrading (Tim)','Pribadi','Sosial','Belajar','Karir'];
+  const mainRowsHtml = rows.map(r=>{
+    const pribadi = getBidangW(r,'Bidang Pribadi'), sosial = getBidangW(r,'Bidang Sosial'), belajar = getBidangW(r,'Bidang Belajar'), karir = getBidangW(r,'Bidang Karir');
+    return `<tr>${td(r.nama)}${td(r.assignedKelas.join(', ')||'-')}${td(r.layanan)}${td(r.kasus)}${td(r.klasikal)}${td(r.homeVisit)}${td(r.administrasiCount)}${td(r.total+r.administrasiCount,true)}${td(r.jumlahSiswaTotal||'-')}${td(r.hasJumlahSiswaData ? r.persenTerlayaniTotal+'%' : '-')}${td(totalUpgradingW)}${td(r.totalBidangFreq>0?pribadi.persen+'%':'-')}${td(r.totalBidangFreq>0?sosial.persen+'%':'-')}${td(r.totalBidangFreq>0?belajar.persen+'%':'-')}${td(r.totalBidangFreq>0?karir.persen+'%':'-')}</tr>`;
+  }).join('');
+
+  const kelasRowsW = collectKelasCapaianRows();
+  const manualW = DB.kelasCapaianManual || {};
+  const waliKelasW = DB.kelasWaliKelas || {};
+  const rekapHead = ['No','Kelas','Jml Siswa','Konseling','Belum','% Capaian','Ketuntasan','Wali Kelas','Personal BK'];
+  const rekapRowsHtml = kelasRowsW.map((r,i)=>{
+    const m = manualW[r.kelas] || { ketuntasan:'' };
+    return `<tr>${td(i+1)}${td(r.kelas)}${td(r.jumlahSiswa)}${td(r.terkonseling)}${td(r.belum)}${td(r.persenCapaian+'%')}${td(m.ketuntasan||'-')}${td(waliKelasW[r.kelas]||'-')}${td(r.personalBK)}</tr>`;
+  }).join('');
+
+  const namaWakaW = (DB.settings.namaWakaKesiswaan || '').trim();
+  const kanitPW = (DB.personalBK||[]).find(p=>p.id===DB.settings.kanitBKId);
+  const namaKanitW = kanitPW ? kanitPW.nama : '-';
+
+  const htmlString = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Calibri,Arial,sans-serif;">
+    <p style="text-align:right;color:#A83232;font-weight:bold;">SANGAT RAHASIA</p>
+    <h1 style="text-align:center;color:#0a2e2a;">Analisis Data Jurnal Konselor</h1>
+    <p style="text-align:center;color:#8A6A24;font-style:italic;">SMP Al Hikmah Full Day School Surabaya &mdash; ${esc(laporanTahunAjaranLabel())}</p>
+    <p style="text-align:center;font-weight:bold;font-size:16px;">Bismillahirrohmanirrohim</p>
+    <p>Assalamu'alaikum warahmatullahi wabarakatuh.</p>
+    <p>Puji syukur kami panjatkan kehadirat Allah SWT, atas rahmat dan karunia-Nya, Analisis Data Jurnal Konselor ini dapat tersusun. Laporan ini disusun sebagai bahan evaluasi dan pemetaan kinerja Personal BK dalam melaksanakan layanan Bimbingan dan Konseling di SMP Al Hikmah Full Day School Surabaya.</p>
+    <h2 style="color:#0a2e2a;">Tabel Perbandingan Personal BK</h2>
+    <table style="border-collapse:collapse;width:100%;"><tr>${mainHead.map(th).join('')}</tr>${mainRowsHtml}</table>
+    <h2 style="color:#0a2e2a;">Rekap Capaian Konseling Siswa per Kelas</h2>
+    <table style="border-collapse:collapse;width:100%;"><tr>${rekapHead.map(th).join('')}</tr>${rekapRowsHtml}</table>
+    <p>Demikian Analisis Data Jurnal Konselor ini kami sampaikan sebagai bahan evaluasi dan pertimbangan pengambilan kebijakan terkait kinerja Bimbingan dan Konseling. Atas perhatian dan kerja sama yang baik, kami ucapkan terima kasih.</p>
+    <p style="font-weight:bold;">Wassalamu'alaikum warahmatullahi wabarakatuh.</p>
+    <table style="border-collapse:collapse;width:100%;margin-top:40px;"><tr>
+      <td style="width:50%;text-align:center;vertical-align:top;">
+        <p>Wakil Kepala Kesiswaan</p><p>SMP Al Hikmah Full Day School Surabaya</p><br><br><br>
+        <p style="font-weight:bold;">${esc(namaWakaW || '( ..................................... )')}</p>
+      </td>
+      <td style="width:50%;text-align:center;vertical-align:top;">
+        <p>Surabaya, ${esc(fmtDateID(todayISO()))}</p><p>Kanit BK</p><p>SMP Al Hikmah Full Day School Surabaya</p><br><br><br>
+        <p style="font-weight:bold;">${esc(namaKanitW)}</p>
+      </td>
+    </tr></table>
+  </body></html>`;
+
+  const blob = htmlDocx.asBlob(htmlString);
+  const url = URL.createObjectURL(blob);
+  const a = window.document.createElement('a');
+  a.href = url;
+  a.download = `Analisis_Data_Jurnal_Konselor_${todayISO()}.docx`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Berkas Word diunduh');
 }
 
 function downloadBackup(){
@@ -5159,7 +6005,7 @@ function exportKasusExcel(induk){
   toast('Berkas Excel diunduh');
 }
 
-function pdfHeader(doc, title, subtitle){
+function pdfHeader(doc, title, subtitle, lineColor){
   const pageWidth = doc.internal.pageSize.getWidth();
   try{ doc.addImage(LOGO_ICON, 'PNG', pageWidth/2-14, 24, 28, 28); }catch(e){}
   doc.setFont('helvetica','bold');
@@ -5169,7 +6015,8 @@ function pdfHeader(doc, title, subtitle){
   doc.setFontSize(10.5);
   doc.setTextColor(138,106,36);
   doc.text(subtitle, pageWidth/2, 80, {align:'center'});
-  doc.setDrawColor(200,200,200);
+  const lc = lineColor || [200,200,200];
+  doc.setDrawColor(lc[0], lc[1], lc[2]);
   doc.line(40, 90, pageWidth-40, 90);
   return 100;
 }
