@@ -70,6 +70,15 @@ input,select,textarea{font-family:inherit;}
 .topbar nav button.active{background:var(--gold-600);border-color:var(--gold-600);color:var(--teal-950);font-weight:700;}
 .topbar nav button.nav-locked{opacity:.4;}
 .topbar nav button.nav-locked:hover{background:rgba(255,255,255,.08);}
+.topbar nav a.nav-link-btn{
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.18);
+  color:var(--white);
+  padding:8px 14px;border-radius:999px;font-size:13px;font-weight:500;
+  text-decoration:none;transition:background .15s;display:inline-flex;align-items:center;gap:5px;
+}
+.topbar nav a.nav-link-btn:hover{background:rgba(255,255,255,.18);}
+.topbar nav .nav-link-row{display:flex;gap:6px;}
 
 /* ---------- Layout ---------- */
 .wrap{max-width:1080px;margin:0 auto;padding:26px 20px 70px;}
@@ -302,6 +311,8 @@ table.list .rowactions{display:flex;gap:6px;flex-wrap:wrap;}
   }
   .topbar nav.mobile-open{display:flex;}
   .topbar nav button{width:100%;text-align:left;padding:12px 14px;font-size:14.5px;}
+  .topbar nav .nav-link-row{display:flex;gap:6px;margin-top:6px;}
+  .topbar nav a.nav-link-btn{flex:1;width:auto;justify-content:center;text-align:center;padding:10px 8px;font-size:12px;}
 
   /* --- Tombol aksi menumpuk penuh, mudah disentuh --- */
   .ractions,.btnrow{flex-wrap:wrap;}
@@ -346,6 +357,10 @@ table.list .rowactions{display:flex;gap:6px;flex-wrap:wrap;}
     <button data-nav="kelola">Kelola Data</button>
     <button data-nav="analisis">Analisis Data Jurnal Konselor</button>
     <button data-nav="pengontrol" id="navPengontrol">Pengontrol Sistem Kata Sandi</button>
+    <div class="nav-link-row">
+      <a href="https://alhikmah.sekolahku.id/login" target="_blank" rel="noopener" class="nav-link-btn">&#127760; alhikmah.sekolahku</a>
+      <a href="https://alhikmah.elearning.sekolahku.id/" target="_blank" rel="noopener" class="nav-link-btn">&#127760; elearning.sekolahku</a>
+    </div>
   </nav>
 </div>
 
