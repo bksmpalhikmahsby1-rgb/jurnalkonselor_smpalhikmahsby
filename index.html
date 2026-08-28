@@ -899,6 +899,9 @@ const STATE = {
   personalBKAuthTarget: null,
   personalBKConfirmTarget: null,
   editingWaliKelasId: null,
+  viewingStudentAnalysisInduk: null,
+  studentAnalysisSearchQ: '',
+  studentAnalysisFilterKelas: '',
   personalBKAuthenticated: false,
   kelolaKelasEditIds: {},
   personalBKAuthMode: null,
@@ -1867,6 +1870,123 @@ function renderBidangBadges(freq){
 }
 function buildBidangBadgesHtml(induk){
   return renderBidangBadges(computeBidangFrequency(induk));
+}
+
+function computeStudentAnalysis(induk){
+  const student = DB.students.find(s=>s.induk===induk);
+  if(!student) return null;
+  const layanan = (DB.layanan[induk]||[]).slice().sort((a,b)=>b.createdAt-a.createdAt);
+  const kasus = (DB.kasus[induk]||[]).slice().sort((a,b)=>b.createdAt-a.createdAt);
+  const freq = computeBidangFrequency(induk);
+  const totalFreq = Object.values(freq).reduce((a,n)=>a+n,0);
+  const allTgl = [...layanan.map(r=>r.tgl), ...kasus.map(r=>r.tgl)].filter(Boolean).sort().reverse();
+  const terakhirTgl = allTgl[0] || null;
+
+  let dominan = null, dominanFreq = 0;
+  BIDANG_BK_OPTIONS.forEach(b=>{ if(freq[b] > dominanFreq){ dominan = b; dominanFreq = freq[b]; } });
+
+  let ringkasan, perhatian;
+  if(layanan.length === 0 && kasus.length === 0){
+    ringkasan = `${esc(student.nama)} belum pernah tercatat menerima Layanan BK maupun permasalahan sepanjang tahun ajaran ini.`;
+    perhatian = `Belum ada data layanan sama sekali untuk siswa ini. Pertimbangkan menjadwalkan konseling awal atau layanan klasikal untuk memetakan kebutuhannya.`;
+  } else {
+    const bagianLayanan = layanan.length > 0 ? `telah menerima ${layanan.length} kali Layanan BK` : `belum pernah menerima Layanan BK`;
+    const bagianKasus = kasus.length > 0 ? ` dan tercatat ${kasus.length} permasalahan` : ``;
+    const bagianDominan = dominan ? ` Sebagian besar layanan berkaitan dengan ${dominan} (${dominanFreq} kali), menunjukkan fokus utama kebutuhan konseling pada aspek ${dominan.replace('Bidang ','').toLowerCase()}.` : '';
+    ringkasan = `${esc(student.nama)} ${bagianLayanan}${bagianKasus} sepanjang tahun ajaran ini.${bagianDominan}`;
+
+    if(kasus.length > 0){
+      const daftarKasus = kasus.slice(0,3).map(k=>`"${esc(k.namaKasus)}" pada ${fmtDateID(k.tgl)} (${k.bidang.replace('Bidang ','')})`).join('; ');
+      perhatian = `Tercatat permasalahan: ${daftarKasus}${kasus.length>3?`, dan ${kasus.length-3} lainnya`:''}. Disarankan pemantauan berkelanjutan dan tindak lanjut sesuai penanganan yang sudah dicatat.`;
+    } else if(dominan === 'Bidang Sosial' || dominan === 'Bidang Pribadi'){
+      perhatian = `Fokus layanan pada aspek ${dominan.replace('Bidang ','').toLowerCase()} tanpa permasalahan formal tercatat. Tetap perlu dipantau perkembangannya pada layanan berikutnya.`;
+    } else {
+      perhatian = `Tidak ada permasalahan formal yang tercatat untuk siswa ini sejauh ini.`;
+    }
+  }
+
+  return { student, layanan, kasus, freq, totalFreq, terakhirTgl, dominan, dominanFreq, ringkasan, perhatian };
+}
+
+function buildStudentAnalysisListHtml(){
+  const assigned = assignedKelasList();
+  let rows = DB.students.filter(s=>assigned.includes(s.kelas));
+  if(STATE.studentAnalysisFilterKelas) rows = rows.filter(s=>s.kelas===STATE.studentAnalysisFilterKelas);
+  if(STATE.studentAnalysisSearchQ){
+    const q = STATE.studentAnalysisSearchQ.toLowerCase();
+    rows = rows.filter(s=> s.nama.toLowerCase().includes(q) || String(s.induk).includes(q));
+  }
+  rows = rows.slice().sort((a,b)=> a.nama.localeCompare(b.nama));
+  return `
+    <div class="grid2" style="margin-bottom:14px;">
+      <div class="field">
+        <label>Cari Nama / Induk Siswa</label>
+        <input type="text" id="studentAnalysisSearchInput" value="${esc(STATE.studentAnalysisSearchQ)}" placeholder="Ketik nama atau nomor induk...">
+      </div>
+      <div class="field">
+        <label>Filter Kelas</label>
+        <select id="studentAnalysisFilterKelasInput">
+          <option value="">Semua Kelas Tugas</option>
+          ${assigned.map(k=>`<option value="${k}" ${k===STATE.studentAnalysisFilterKelas?'selected':''}>${k}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${rows.length ? `
+    <div style="overflow-x:auto;">
+    <table class="list">
+      <thead><tr><th>Nama Siswa</th><th>Kelas</th><th>Aksi</th></tr></thead>
+      <tbody>
+        ${rows.map(s=>`<tr>
+          <td class="namecell">${esc(s.nama)}</td>
+          <td>${esc(s.kelas)}</td>
+          <td><button class="btn btn-outline btn-sm" onclick="viewStudentAnalysis('${s.induk}')">&#128065; Lihat</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>` : `<div class="empty">Tidak ada siswa yang cocok dengan pencarian/filter.</div>`}
+    ${STATE.viewingStudentAnalysisInduk ? buildStudentAnalysisModalHtml() : ''}
+  `;
+}
+
+function buildStudentAnalysisModalHtml(){
+  const a = computeStudentAnalysis(STATE.viewingStudentAnalysisInduk);
+  if(!a) return '';
+  return `
+  <div class="modal-bg" onclick="if(event.target===this) closeStudentAnalysis()">
+    <div class="modal" style="max-width:560px;">
+      <h2 style="margin-top:0;">Analisis Siswa: ${esc(a.student.nama)}</h2>
+      <p class="hint" style="margin-top:-8px;">Kelas ${esc(a.student.kelas)} &middot; Induk ${esc(a.student.induk)}</p>
+      <div style="display:flex;gap:20px;margin:16px 0;flex-wrap:wrap;">
+        <div><div style="font-size:11px;color:var(--ink-soft);">Layanan BK</div><div style="font-size:24px;font-weight:700;color:var(--teal-900);">${a.layanan.length}</div></div>
+        <div><div style="font-size:11px;color:var(--ink-soft);">Permasalahan</div><div style="font-size:24px;font-weight:700;color:var(--teal-900);">${a.kasus.length}</div></div>
+        <div><div style="font-size:11px;color:var(--ink-soft);">Terakhir Dilayani</div><div style="font-size:15px;font-weight:700;color:var(--teal-900);margin-top:4px;">${a.terakhirTgl ? fmtDateID(a.terakhirTgl) : '-'}</div></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">Sebaran Bidang BK</div>
+        ${renderBidangBadges(a.freq)}
+      </div>
+      <div class="warnbox" style="background:var(--teal-50);border-left:4px solid var(--teal-700);margin-top:14px;">
+        <div class="wtitle">&#128221; Ringkasan Analisis</div>
+        <div class="wbody">${a.ringkasan}</div>
+      </div>
+      <div class="warnbox" style="margin-top:10px;">
+        <div class="wtitle">&#9888; Hal yang Perlu Diperhatikan</div>
+        <div class="wbody">${a.perhatian}</div>
+      </div>
+      <div class="btnrow" style="margin-top:18px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeStudentAnalysis()">Tutup</button>
+      </div>
+    </div>
+  </div>
+  `;
+}
+function viewStudentAnalysis(induk){
+  STATE.viewingStudentAnalysisInduk = induk;
+  render();
+}
+function closeStudentAnalysis(){
+  STATE.viewingStudentAnalysisInduk = null;
+  render();
 }
 
 function buildStudentRowsHtml(){
@@ -3837,6 +3957,16 @@ document.addEventListener('submit', async (e)=>{
 });
 
 document.addEventListener('change', (e)=>{
+  if(e.target.id === 'studentAnalysisSearchInput'){
+    STATE.studentAnalysisSearchQ = e.target.value;
+    render();
+    return;
+  }
+  if(e.target.id === 'studentAnalysisFilterKelasInput'){
+    STATE.studentAnalysisFilterKelas = e.target.value;
+    render();
+    return;
+  }
   if(e.target.classList && e.target.classList.contains('kelas-ketuntasan-input')){
     updateKelasCapaianManual(e.target.dataset.kelas, 'ketuntasan', e.target.value.trim());
     return;
@@ -4715,6 +4845,12 @@ async function renderKelola(){
         <button class="btn btn-gold" onclick="exportLaporanLengkapPDF()">&#11015; Cetak PDF Gabungan</button>
         <button class="btn btn-gold" onclick="exportLaporanLengkapWord()">&#11015; Cetak Word Gabungan</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>&#128200; Info Grafis &amp; Analisis per Siswa</h2>
+      <p class="hint" style="margin-top:-6px;margin-bottom:12px;">Cakupan: siswa di kelas yang ditugaskan ke Anda. Klik "Lihat" untuk analisis hasil konseling, permasalahan, dan Bidang BK per siswa.</p>
+      ${buildStudentAnalysisListHtml()}
     </div>
 
     <div class="card">
