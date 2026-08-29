@@ -108,6 +108,19 @@ input,select,textarea{font-family:inherit;}
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
 .field label{font-size:12.5px;font-weight:600;color:var(--teal-900);letter-spacing:.15px;}
 .field .hint{font-size:11.5px;color:var(--ink-soft);font-weight:400;margin-top:-3px;}
+.student-suggest-box{
+  display:none;position:absolute;top:100%;left:0;right:0;z-index:50;
+  background:var(--white);border:1.5px solid var(--teal-700);border-radius:8px;
+  margin-top:4px;max-height:260px;overflow-y:auto;
+  box-shadow:0 6px 20px rgba(10,46,42,.18);
+}
+.student-suggest-box.open{display:block;}
+.student-suggest-item{padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--line);font-size:13.5px;}
+.student-suggest-item:last-child{border-bottom:none;}
+.student-suggest-item:hover,.student-suggest-item.active{background:var(--teal-50);}
+.student-suggest-item .ssi-induk{font-weight:700;color:var(--teal-900);}
+.student-suggest-item .ssi-nama{color:var(--ink);}
+.student-suggest-item .ssi-kelas{color:var(--ink-soft);font-size:12px;}
 .field input,.field select,.field textarea{
   border:1.5px solid var(--line);
   border-radius:8px;
@@ -2379,14 +2392,15 @@ async function renderBeranda(){
       </p>
       <form id="formIdentitas">
         <div class="grid3">
-          <div class="field">
+          <div class="field" style="position:relative;">
             <label>Nomor Induk</label>
-            <input type="text" id="fNomorInduk" placeholder="mis. 5437" inputmode="numeric" pattern="\\d{4}" maxlength="4" required>
+            <input type="text" id="fNomorInduk" class="student-suggest-input" data-suggest-target="individu" placeholder="mis. 5437" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" required>
             <span class="hint">Wajib 4 angka</span>
+            <div class="student-suggest-box" id="suggestBox_individu"></div>
           </div>
-          <div class="field">
+          <div class="field" style="position:relative;">
             <label>Nama Siswa</label>
-            <input type="text" id="fNamaSiswa" placeholder="Nama lengkap siswa" required>
+            <input type="text" id="fNamaSiswa" class="student-suggest-input" data-suggest-target="individu" placeholder="Nama lengkap siswa" autocomplete="off" required>
           </div>
           <div class="field">
             <label>Kelas</label>
@@ -2609,13 +2623,14 @@ function updateStudentTable(){
 function renderKelompokRowsHtml(){
   return STATE.kelompokMembers.map((m,i)=>`
     <div class="grid3" style="align-items:end;">
-      <div class="field">
+      <div class="field" style="position:relative;">
         <label>Nomor Induk</label>
-        <input type="text" class="kr-induk" data-i="${i}" value="${esc(m.induk)}" placeholder="mis. 5437" inputmode="numeric" pattern="\\d{4}" maxlength="4">
+        <input type="text" class="kr-induk student-suggest-input" data-i="${i}" data-suggest-target="kelompok-${i}" value="${esc(m.induk)}" placeholder="mis. 5437" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off">
+        <div class="student-suggest-box" id="suggestBox_kelompok-${i}"></div>
       </div>
-      <div class="field">
+      <div class="field" style="position:relative;">
         <label>Nama Siswa</label>
-        <input type="text" class="kr-nama" data-i="${i}" value="${esc(m.nama)}" placeholder="Nama lengkap siswa">
+        <input type="text" class="kr-nama student-suggest-input" data-i="${i}" data-suggest-target="kelompok-${i}" value="${esc(m.nama)}" placeholder="Nama lengkap siswa" autocomplete="off">
       </div>
       <div class="field">
         <label>Kelas</label>
@@ -3438,6 +3453,74 @@ function exportHomeVisitPDF(source){
   doc.save(`Home_Visit_${todayISO()}.pdf`);
   toast('Berkas PDF diunduh');
 }
+
+function findStudentSuggestions(query){
+  const q = (query||'').trim().toLowerCase();
+  if(!q) return [];
+  return DB.students
+    .filter(s => String(s.induk).toLowerCase().includes(q) || s.nama.toLowerCase().includes(q))
+    .slice(0, 8);
+}
+function renderStudentSuggestBoxHtml(matches, targetId){
+  if(!matches.length) return '';
+  return matches.map(s=>`<div class="student-suggest-item" data-target="${esc(targetId)}" data-induk="${esc(s.induk)}" data-nama="${esc(s.nama)}" data-kelas="${esc(s.kelas)}"><span class="ssi-induk">${esc(s.induk)}</span> — <span class="ssi-nama">${esc(s.nama)}</span> <span class="ssi-kelas">(${esc(s.kelas)})</span></div>`).join('');
+}
+function updateStudentSuggestBox(targetId, query){
+  const box = document.getElementById('suggestBox_'+targetId);
+  if(!box) return;
+  const matches = findStudentSuggestions(query);
+  if(!matches.length){ box.classList.remove('open'); box.innerHTML=''; return; }
+  box.innerHTML = renderStudentSuggestBoxHtml(matches, targetId);
+  box.classList.add('open');
+}
+function closeAllStudentSuggestBoxes(){
+  document.querySelectorAll('.student-suggest-box.open').forEach(b=>{ b.classList.remove('open'); b.innerHTML=''; });
+}
+function applyStudentSuggestion(targetId, induk, nama, kelas){
+  if(targetId === 'individu'){
+    const elInduk = document.getElementById('fNomorInduk');
+    const elNama = document.getElementById('fNamaSiswa');
+    const elKelas = document.getElementById('fKelas');
+    if(elInduk) elInduk.value = induk;
+    if(elNama) elNama.value = nama;
+    if(elKelas && [...elKelas.options].some(o=>o.value===kelas)) elKelas.value = kelas;
+  } else if(targetId.startsWith('kelompok-')){
+    const i = targetId.split('-')[1];
+    const elInduk = document.querySelector(`.kr-induk[data-i="${i}"]`);
+    const elNama = document.querySelector(`.kr-nama[data-i="${i}"]`);
+    const elKelas = document.querySelector(`.kr-kelas[data-i="${i}"]`);
+    if(elInduk) elInduk.value = induk;
+    if(elNama) elNama.value = nama;
+    if(elKelas && [...elKelas.options].some(o=>o.value===kelas)) elKelas.value = kelas;
+    if(STATE.kelompokMembers[+i]){
+      STATE.kelompokMembers[+i].induk = induk;
+      STATE.kelompokMembers[+i].nama = nama;
+      STATE.kelompokMembers[+i].kelas = kelas;
+    }
+  }
+  closeAllStudentSuggestBoxes();
+}
+document.addEventListener('input', (e)=>{
+  if(e.target.classList && e.target.classList.contains('student-suggest-input')){
+    const targetId = e.target.dataset.suggestTarget;
+    updateStudentSuggestBox(targetId, e.target.value);
+  }
+});
+document.addEventListener('click', (e)=>{
+  const item = e.target.closest('.student-suggest-item');
+  if(item){
+    applyStudentSuggestion(item.dataset.target, item.dataset.induk, item.dataset.nama, item.dataset.kelas);
+    return;
+  }
+  if(!e.target.closest('.student-suggest-input') && !e.target.closest('.student-suggest-box')){
+    closeAllStudentSuggestBoxes();
+  }
+});
+document.addEventListener('focusin', (e)=>{
+  if(e.target.classList && e.target.classList.contains('student-suggest-input') && e.target.value.trim()){
+    updateStudentSuggestBox(e.target.dataset.suggestTarget, e.target.value);
+  }
+});
 
 function bindGlobalHandlers(){
   const formIdentitas = document.getElementById('formIdentitas');
