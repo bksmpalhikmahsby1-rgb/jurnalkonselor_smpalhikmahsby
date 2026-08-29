@@ -902,6 +902,9 @@ const STATE = {
   viewingStudentAnalysisInduk: null,
   studentAnalysisSearchQ: '',
   studentAnalysisFilterKelas: '',
+  kelompokChipSearchQ: '',
+  kelompokChipsExpanded: false,
+  kelompokEditMode: false,
   personalBKAuthenticated: false,
   kelolaKelasEditIds: {},
   personalBKAuthMode: null,
@@ -3349,55 +3352,79 @@ function ulangiKelompokBaru(){
 async function renderKelompok(){
   const members = STATE.currentKelompokMembers || [];
   if(!members.length){ STATE.view='beranda'; return await renderBeranda(); }
-  const chips = members.map(m=>`<span class="pill pill-gold" style="margin-right:6px;margin-bottom:6px;display:inline-block;">${esc(m.nama)} (${esc(m.induk)} &middot; ${esc(m.kelas)})</span>`).join('');
+
+  const CHIP_THRESHOLD = 8;
+  const q = (STATE.kelompokChipSearchQ||'').trim().toLowerCase();
+  const filteredMembers = q
+    ? members.filter(m => m.nama.toLowerCase().includes(q) || String(m.induk).toLowerCase().includes(q) || m.kelas.toLowerCase().includes(q))
+    : members;
+  const showAll = STATE.kelompokChipsExpanded || filteredMembers.length <= CHIP_THRESHOLD;
+  const visibleMembers = showAll ? filteredMembers : filteredMembers.slice(0, CHIP_THRESHOLD);
+  const chips = visibleMembers.map(m=>`<span class="pill pill-gold" style="margin-right:6px;margin-bottom:6px;display:inline-block;">${esc(m.nama)} (${esc(m.induk)} &middot; ${esc(m.kelas)})</span>`).join('');
+  const searchBoxHtml = members.length > CHIP_THRESHOLD ? `
+    <div class="field" style="max-width:360px;margin-bottom:10px;">
+      <label>Cari Anggota (No. Induk / Nama / Kelas)</label>
+      <input type="text" id="kelompokChipSearchInput" value="${esc(STATE.kelompokChipSearchQ)}" placeholder="Ketik untuk mencari...">
+    </div>` : '';
+  const toggleBtnHtml = (members.length > CHIP_THRESHOLD && filteredMembers.length > CHIP_THRESHOLD) ? `
+    <button type="button" class="btn btn-outline btn-sm" onclick="toggleKelompokChipsExpanded()" style="margin-top:4px;">
+      ${showAll ? '&#9650; Tutup' : `&#9660; Tampilkan Semua (${filteredMembers.length})`}
+    </button>` : '';
+  const noMatchHtml = (q && filteredMembers.length===0) ? `<div class="empty">Tidak ada anggota yang cocok dengan pencarian.</div>` : '';
+
   const saved = STATE.lastKelompokSession;
 
-  const formBlock = !saved ? `
+  const formBlock = (!saved || STATE.kelompokEditMode) ? `
     <div class="card">
-      <h2><span class="num">2</span> Entri Layanan BK Kelompok</h2>
+      <h2><span class="num">2</span> ${STATE.kelompokEditMode ? 'Edit Layanan BK Kelompok' : 'Entri Layanan BK Kelompok'}</h2>
       <form id="formKelompokLayanan">
         <div class="grid3">
           <div class="field">
             <label>Tanggal Pelaksanaan</label>
-            <input type="date" id="glTgl" value="${todayISO()}" required>
+            <input type="date" id="glTgl" value="${STATE.kelompokEditMode ? esc(saved.tgl) : todayISO()}" required>
           </div>
           <div class="field">
             <label>Layanan BK</label>
             <select id="glJenis" required>
               <option value="">Pilih layanan&hellip;</option>
-              ${LAYANAN_KELOMPOK_OPTIONS.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+              ${LAYANAN_KELOMPOK_OPTIONS.map(o=>`<option value="${esc(o)}" ${STATE.kelompokEditMode && saved.jenis===o?'selected':''}>${esc(o)}</option>`).join('')}
             </select>
           </div>
           <div class="field">
             <label>Bidang BK</label>
             <select id="glBidang" required>
               <option value="">Pilih bidang&hellip;</option>
-              ${BIDANG_BK_OPTIONS.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+              ${BIDANG_BK_OPTIONS.map(o=>`<option value="${esc(o)}" ${STATE.kelompokEditMode && saved.bidang===o?'selected':''}>${esc(o)}</option>`).join('')}
             </select>
           </div>
         </div>
         <div class="grid2">
           <div class="field">
             <label>Guru BK</label>
-            <input type="text" id="glGuru" placeholder="Nama guru BK" value="${esc(DB.settings.lastGuru||'')}">
+            <input type="text" id="glGuru" placeholder="Nama guru BK" value="${STATE.kelompokEditMode ? esc(saved.guru||'') : esc(DB.settings.lastGuru||'')}">
           </div>
         </div>
         <div class="field">
           <label>Hasil Layanan BK (berlaku untuk seluruh anggota kelompok)</label>
-          <textarea id="glHasil" placeholder="Tuliskan hasil layanan kelompok&hellip;" required></textarea>
+          <textarea id="glHasil" placeholder="Tuliskan hasil layanan kelompok&hellip;" required>${STATE.kelompokEditMode ? esc(saved.hasil) : ''}</textarea>
         </div>
         <div class="btnrow">
-          <button type="submit" class="btn btn-gold">Simpan Layanan BK Kelompok</button>
+          <button type="submit" class="btn btn-gold">${STATE.kelompokEditMode ? 'Simpan Perubahan' : 'Simpan Layanan BK Kelompok'}</button>
+          ${STATE.kelompokEditMode ? `<button type="button" class="btn btn-ghost" onclick="batalEditKelompok()">Batal</button>` : ''}
         </div>
       </form>
     </div>` : '';
 
-  const successBlock = saved ? `
+  const successBlock = (saved && !STATE.kelompokEditMode) ? `
     <div class="card">
       <h2><span class="num">3</span> Tersimpan &amp; Siap Dicetak</h2>
       <div class="warnbox">
         <div class="wtitle">&#9989; ${esc(saved.jenis)} tanggal ${fmtDateID(saved.tgl)} tersimpan untuk ${members.length} siswa</div>
         <div class="wbody">Bidang BK: <b>${esc(saved.bidang||'-')}</b><br>Guru BK: <b>${esc(saved.guru||'-')}</b><br>${esc(saved.hasil)}</div>
+      </div>
+      <div class="btnrow" style="margin-top:12px;">
+        <button class="btn btn-outline btn-sm" onclick="mulaiEditKelompok()">&#9998; Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="hapusSesiKelompok()">Hapus</button>
       </div>
       <div class="searchbar">
         <div class="btnrow" style="margin:0;">
@@ -3424,12 +3451,48 @@ async function renderKelompok(){
     </div>
     <div class="card">
       <h2><span class="num">1</span> Anggota Kelompok</h2>
+      ${searchBoxHtml}
       <div>${chips}</div>
+      ${noMatchHtml}
+      ${toggleBtnHtml}
     </div>
     ${formBlock}
     ${successBlock}
   `;
 }
+function toggleKelompokChipsExpanded(){
+  STATE.kelompokChipsExpanded = !STATE.kelompokChipsExpanded;
+  render();
+}
+function mulaiEditKelompok(){
+  STATE.kelompokEditMode = true;
+  render();
+}
+function batalEditKelompok(){
+  STATE.kelompokEditMode = false;
+  render();
+}
+async function hapusSesiKelompok(){
+  const saved = STATE.lastKelompokSession;
+  if(!saved) return;
+  const ok = await textConfirmModal(
+    '⚠ Hapus Sesi Layanan BK Kelompok',
+    `Catatan <b>${esc(saved.jenis)} tanggal ${fmtDateID(saved.tgl)}</b> akan dihapus PERMANEN dari <b>seluruh ${saved.members.length} anggota kelompok</b> sekaligus. Tindakan ini tidak bisa dibatalkan.`,
+    'HAPUS'
+  );
+  if(!ok) return;
+  for(const m of saved.members){
+    await loadLayanan(m.induk);
+    DB.layanan[m.induk] = (DB.layanan[m.induk]||[]).filter(r => r.kelompokId !== saved.kelompokId);
+    await saveLayanan(m.induk);
+  }
+  await logActivity(`Menghapus sesi Layanan BK Kelompok (${esc(saved.jenis)}, ${fmtDateID(saved.tgl)}) untuk ${saved.members.length} siswa`);
+  toast('Sesi Layanan BK Kelompok dihapus');
+  STATE.lastKelompokSession = null;
+  STATE.kelompokEditMode = false;
+  render();
+}
+
 
 /* ---------- HALAMAN 2: LAYANAN BK ---------- */
 function renderLayananTab(s){
@@ -3792,6 +3855,21 @@ document.addEventListener('submit', async (e)=>{
     const guru = document.getElementById('glGuru').value.trim();
     const hasil = document.getElementById('glHasil').value.trim();
     if(!tgl || !jenis || !bidang || !hasil){ toast('Lengkapi semua isian layanan BK kelompok', true); return; }
+    if(STATE.kelompokEditMode && STATE.lastKelompokSession){
+      const kelompokId = STATE.lastKelompokSession.kelompokId;
+      for(const m of STATE.lastKelompokSession.members){
+        await loadLayanan(m.induk);
+        const rec = (DB.layanan[m.induk]||[]).find(r=>r.kelompokId===kelompokId);
+        if(rec){ rec.tgl=tgl; rec.jenis=jenis; rec.bidang=bidang; rec.guru=guru; rec.hasil=hasil; }
+        await saveLayanan(m.induk);
+      }
+      await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
+      toast(`Perubahan sesi Layanan BK Kelompok tersimpan`);
+      STATE.lastKelompokSession = { ...STATE.lastKelompokSession, tgl, jenis, bidang, guru, hasil };
+      STATE.kelompokEditMode = false;
+      render();
+      return;
+    }
     const kelompokId = uid();
     for(const m of members){
       await loadLayanan(m.induk);
@@ -3957,6 +4035,11 @@ document.addEventListener('submit', async (e)=>{
 });
 
 document.addEventListener('change', (e)=>{
+  if(e.target.id === 'kelompokChipSearchInput'){
+    STATE.kelompokChipSearchQ = e.target.value;
+    render();
+    return;
+  }
   if(e.target.id === 'studentAnalysisSearchInput'){
     STATE.studentAnalysisSearchQ = e.target.value;
     render();
