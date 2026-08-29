@@ -3459,6 +3459,7 @@ function bindGlobalHandlers(){
       if(!okSave) return;
       await loadLayanan(induk); await loadKasus(induk);
       toast('Identitas siswa disimpan');
+      updateStudentTable();
       document.getElementById('afterSaveBox').innerHTML = `
         <div class="warnbox" style="margin-top:14px;">
           <div class="wtitle">✅ ${esc(nama)} (${esc(induk)} — ${esc(kelas)}) siap dilanjutkan</div>
