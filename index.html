@@ -3500,11 +3500,27 @@ function applyStudentSuggestion(targetId, induk, nama, kelas){
   }
   closeAllStudentSuggestBoxes();
 }
+function tryAutoFillFromInduk(e){
+  const isIndividuInduk = e.target.id === 'fNomorInduk';
+  const isKelompokInduk = e.target.classList.contains('kr-induk');
+  if(!isIndividuInduk && !isKelompokInduk) return;
+  const induk = e.target.value.trim();
+  if(!/^\d{4}$/.test(induk)) return;
+  const match = findStudent(induk);
+  if(!match) return;
+  if(isIndividuInduk){
+    applyStudentSuggestion('individu', match.induk, match.nama, match.kelas);
+  } else {
+    const i = e.target.dataset.i;
+    applyStudentSuggestion('kelompok-'+i, match.induk, match.nama, match.kelas);
+  }
+}
 document.addEventListener('input', (e)=>{
   if(e.target.classList && e.target.classList.contains('student-suggest-input')){
     const targetId = e.target.dataset.suggestTarget;
     updateStudentSuggestBox(targetId, e.target.value);
   }
+  tryAutoFillFromInduk(e);
 });
 document.addEventListener('click', (e)=>{
   const item = e.target.closest('.student-suggest-item');
