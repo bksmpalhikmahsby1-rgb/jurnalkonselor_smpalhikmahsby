@@ -968,14 +968,26 @@ async function loadActivityLog(force){
   return DB.activityLog;
 }
 async function saveActivityLog(){ await sSet('activity_log', DB.activityLog || []); }
+if(!window.__activityLogConfirmedOnce) window.__activityLogConfirmedOnce = false;
 async function logActivity(action){
-  await loadActivityLog();
   const active = (DB.personalBK||[]).find(p=>p.id===DB.settings.activePersonalBKId);
   const actor = active ? active.nama : (DB.settings.lastGuru || 'Tidak diketahui');
-  DB.activityLog = DB.activityLog || [];
-  DB.activityLog.unshift({ ts: Date.now(), actor, action });
-  if(DB.activityLog.length > 200) DB.activityLog = DB.activityLog.slice(0, 200);
-  await saveActivityLog();
+  const fresh = await sGetWithRetry('activity_log');
+  if(fresh && Array.isArray(fresh)){ window.__activityLogConfirmedOnce = true; }
+  else if(window.__activityLogConfirmedOnce){
+    toast('Gagal mencatat aktivitas: tidak bisa memastikan data terbaru dari Google Sheets.', true);
+    return;
+  }
+  let freshLog = (fresh && Array.isArray(fresh)) ? fresh : (DB.activityLog||[]).map(r=>({...r}));
+  freshLog.unshift({ ts: Date.now(), actor, action });
+  if(freshLog.length > 200) freshLog = freshLog.slice(0, 200);
+  const saveOk = await sSet('activity_log', freshLog);
+  if(!saveOk){
+    toast('Gagal mencatat aktivitas ke Google Sheets. Periksa koneksi internet Anda.', true);
+    return;
+  }
+  DB.activityLog = freshLog;
+  window.__activityLogConfirmedOnce = true;
 }
 
 async function loadUpgrading(force){
@@ -1120,6 +1132,10 @@ const STATE = {
   klasikalClosedClasses: {},
   klasikalSuperClosed: false,
   klasikalEditingId: null,
+  wawancaraEditingId: null,
+  homeVisitEditingId: null,
+  upgradingEditingId: null,
+  administrasiEditingId: null,
   administrasiFilterKategori: '',
   laporanKategoriAdministrasi: '',
   laporanJenisUpgrading: '',
@@ -2284,18 +2300,23 @@ async function saveEditStudent(oldInduk){
   const s = findStudent(oldInduk);
   if(!s){ toast('Data siswa tidak ditemukan', true); return; }
 
-  s.nama = nama;
-  s.kelas = kelas;
+  // Peringatan kalau kelas berubah (kecuali memang perubahan nomor induk yang otomatis membawa data,
+  // dalam kasus itu tidak perlu peringatan tambahan karena memang sedang mengedit data siswa itu sendiri)
+  if(newInduk === oldInduk && kelas !== s.kelas){
+    const konfirmasiKelas = await confirmKelasChangeIfNeeded(oldInduk, nama, kelas);
+    if(!konfirmasiKelas) return;
+  }
 
   if(newInduk !== oldInduk){
-    s.induk = newInduk;
     await loadLayanan(oldInduk); await loadKasus(oldInduk);
-    DB.layanan[newInduk] = DB.layanan[oldInduk] || [];
-    DB.kasus[newInduk] = DB.kasus[oldInduk] || [];
+    const layananPindah = DB.layanan[oldInduk] || [];
+    const kasusPindah = DB.kasus[oldInduk] || [];
+    const okLayanan = await mutateLayananSafely(newInduk, fresh=>{ fresh.push(...layananPindah); });
+    if(!okLayanan) return;
+    const okKasus = await mutateKasusSafely(newInduk, fresh=>{ fresh.push(...kasusPindah); });
+    if(!okKasus) return;
     delete DB.layanan[oldInduk];
     delete DB.kasus[oldInduk];
-    await saveLayanan(newInduk);
-    await saveKasus(newInduk);
     await sDel('layanan_'+oldInduk);
     await sDel('kasus_'+oldInduk);
   }
@@ -2893,7 +2914,9 @@ function buildWawancaraRowsHtml(){
   }
   const rows = (DB.wawancaraWali||[]).slice().sort((a,b)=> (b.tgl||'').localeCompare(a.tgl||'') || (b.createdAt-a.createdAt));
   if(!rows.length) return `<div class="empty"><div class="big">Belum ada catatan Wawancara Wali Murid Kelas 7</div>Gunakan formulir di atas untuk menambahkan.</div>`;
-  return rows.map(r => `
+  return rows.map(r => {
+    if(STATE.wawancaraEditingId === r.id) return renderWawancaraEditForm(r);
+    return `
     <div class="record">
       <div class="rtop">
         <div class="tag">Wawancara Wali Murid Kelas 7</div>
@@ -2906,10 +2929,58 @@ function buildWawancaraRowsHtml(){
       </div>
       ${r.catatan ? `<div class="rbody" style="margin-top:6px;"><b>Catatan Penting:</b> ${esc(r.catatan)}</div>` : ''}
       <div class="ractions">
+        <button class="btn btn-outline btn-sm" onclick="startEditWawancara('${r.id}')">Edit</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteWawancaraWali('${r.id}')">Hapus catatan ini</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
+}
+function renderWawancaraEditForm(r){
+  return `
+    <div class="record" style="background:var(--teal-50);">
+      <div class="grid3">
+        <div class="field">
+          <label>Tanggal</label>
+          <input type="date" id="weTgl" value="${esc(r.tgl)}">
+        </div>
+        <div class="field">
+          <label>Terjadwal Hari Ini</label>
+          <input type="number" min="0" id="weTerjadwal" value="${esc(r.terjadwal)}">
+        </div>
+        <div class="field">
+          <label>Yang Terlayani</label>
+          <input type="number" min="0" id="weTerlayani" value="${esc(r.terlayani)}">
+        </div>
+      </div>
+      <div class="field">
+        <label>Catatan Penting</label>
+        <textarea id="weCatatan">${esc(r.catatan||'')}</textarea>
+      </div>
+      <div class="btnrow">
+        <button class="btn btn-gold btn-sm" onclick="saveEditWawancara('${r.id}')">Simpan Perubahan</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelEditWawancara()">Batal</button>
+      </div>
+    </div>
+  `;
+}
+function startEditWawancara(id){ STATE.wawancaraEditingId = id; render(); }
+function cancelEditWawancara(){ STATE.wawancaraEditingId = null; render(); }
+async function saveEditWawancara(id){
+  const tgl = document.getElementById('weTgl').value;
+  const terjadwal = document.getElementById('weTerjadwal').value.trim();
+  const terlayani = document.getElementById('weTerlayani').value.trim();
+  const catatan = document.getElementById('weCatatan').value.trim();
+  if(!tgl || terjadwal==='' || terlayani===''){ toast('Lengkapi semua isian', true); return; }
+  if(Number(terlayani) > Number(terjadwal)){ toast('Jumlah yang terlayani tidak boleh lebih besar dari jumlah terjadwal', true); return; }
+  const okSave = await mutateWawancaraWaliSafely(fresh=>{
+    const target = fresh.find(r=>r.id===id);
+    if(target){ target.tgl=tgl; target.terjadwal=terjadwal; target.terlayani=terlayani; target.catatan=catatan; }
+  });
+  if(!okSave) return;
+  STATE.wawancaraEditingId = null;
+  toast('Perubahan Wawancara Wali Murid tersimpan');
+  render();
 }
 function showAllWawancara(){
   STATE.wawancaraSuperClosed = false;
@@ -2941,7 +3012,9 @@ function buildHomeVisitRowsHtml(){
   }
   const rows = (DB.homeVisit||[]).filter(r=>assigned.includes(r.kelas)).sort((a,b)=> (b.tgl||'').localeCompare(a.tgl||'') || (b.createdAt-a.createdAt));
   if(!rows.length) return `<div class="empty"><div class="big">Belum ada catatan Home Visit</div>Gunakan formulir di atas untuk menambahkan.</div>`;
-  return rows.map(r => `
+  return rows.map(r => {
+    if(STATE.homeVisitEditingId === r.id) return renderHomeVisitEditForm(r);
+    return `
     <div class="record">
       <div class="rtop">
         <div class="tag">${esc(r.nama)} <span class="pill pill-teal" style="margin-left:6px;">${esc(r.kelas)}</span></div>
@@ -2950,10 +3023,55 @@ function buildHomeVisitRowsHtml(){
       <div class="rmeta"><span>Nomor Induk: <b>${esc(r.induk)}</b></span><span>Bersama Wali Kelas: <b>${esc(r.waliKelas||'-')}</b></span></div>
       ${r.catatan ? `<div class="rbody" style="margin-top:6px;"><b>Catatan Singkat:</b> ${esc(r.catatan)}</div>` : ''}
       <div class="ractions">
+        <button class="btn btn-outline btn-sm" onclick="startEditHomeVisit('${r.id}')">Edit</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteHomeVisit('${r.id}')">Hapus catatan ini</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
+}
+function renderHomeVisitEditForm(r){
+  return `
+    <div class="record" style="background:var(--teal-50);">
+      <div class="rtop">
+        <div class="tag">${esc(r.nama)} <span class="pill pill-teal" style="margin-left:6px;">${esc(r.kelas)}</span> <span class="hint">(Induk ${esc(r.induk)})</span></div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label>Tanggal</label>
+          <input type="date" id="hveTgl" value="${esc(r.tgl)}">
+        </div>
+        <div class="field">
+          <label>Bersama Wali Kelas</label>
+          <input type="text" id="hveWaliKelas" value="${esc(r.waliKelas||'')}">
+        </div>
+      </div>
+      <div class="field">
+        <label>Catatan Singkat</label>
+        <textarea id="hveCatatan">${esc(r.catatan||'')}</textarea>
+      </div>
+      <div class="btnrow">
+        <button class="btn btn-gold btn-sm" onclick="saveEditHomeVisit('${r.id}')">Simpan Perubahan</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelEditHomeVisit()">Batal</button>
+      </div>
+    </div>
+  `;
+}
+function startEditHomeVisit(id){ STATE.homeVisitEditingId = id; render(); }
+function cancelEditHomeVisit(){ STATE.homeVisitEditingId = null; render(); }
+async function saveEditHomeVisit(id){
+  const tgl = document.getElementById('hveTgl').value;
+  const waliKelas = document.getElementById('hveWaliKelas').value.trim();
+  const catatan = document.getElementById('hveCatatan').value.trim();
+  if(!tgl){ toast('Lengkapi tanggal', true); return; }
+  const okSave = await mutateHomeVisitSafely(fresh=>{
+    const target = fresh.find(r=>r.id===id);
+    if(target){ target.tgl=tgl; target.waliKelas=waliKelas; target.catatan=catatan; }
+  });
+  if(!okSave) return;
+  STATE.homeVisitEditingId = null;
+  toast('Perubahan Home Visit tersimpan');
+  render();
 }
 function showAllHomeVisit(){
   STATE.homeVisitSuperClosed = false;
@@ -3162,6 +3280,7 @@ function buildUpgradingRowsHtml(filterJenis){
   rows.sort((a,b)=> (b.tglMulai||'').localeCompare(a.tglMulai||'') || (b.createdAt-a.createdAt));
   if(!rows.length) return `<div class="empty"><div class="big">Belum ada catatan Upgrading Personal BK</div>Gunakan formulir di atas untuk menambahkan.</div>`;
   return rows.map(r => {
+    if(STATE.upgradingEditingId === r.id) return renderUpgradingEditForm(r);
     const expanded = !!STATE.upgradingExpandedIds[r.id];
     return `
     <div class="record">
@@ -3173,6 +3292,7 @@ function buildUpgradingRowsHtml(filterJenis){
       <div class="rmeta"><span>Penyelenggara: <b>${esc(r.penyelenggara || '-')}</b></span><span>Pembicara: <b>${esc((r.pembicara||[]).join(', ') || '-')}</b></span></div>
       ${r.catatan ? `<div class="rbody" style="margin-top:6px;"><b>Catatan Penting:</b> ${esc(r.catatan)}</div>` : ''}
       <div class="ractions">
+        <button class="btn btn-outline btn-sm" onclick="startEditUpgrading('${r.id}')">Edit</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteUpgrading('${r.id}')">Hapus catatan ini</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleUpgradingExpand('${r.id}')">&#9650; Tutup Riwayat</button>
       </div>` : `
@@ -3182,6 +3302,68 @@ function buildUpgradingRowsHtml(filterJenis){
     </div>
   `;
   }).join('');
+}
+function renderUpgradingEditForm(r){
+  const jenisOptions = UPGRADING_JENIS_LIST.map(j=>`<option value="${esc(j.key)}" ${r.jenis===j.key?'selected':''}>${esc(j.key)}</option>`).join('');
+  return `
+    <div class="record" style="background:var(--teal-50);">
+      <div class="grid3">
+        <div class="field">
+          <label>Tanggal Mulai</label>
+          <input type="date" id="upeTglMulai" value="${esc(r.tglMulai)}">
+        </div>
+        <div class="field">
+          <label>Tanggal Selesai</label>
+          <input type="date" id="upeTglSelesai" value="${esc(r.tglSelesai)}">
+        </div>
+        <div class="field">
+          <label>Jenis Kegiatan</label>
+          <select id="upeJenis">${jenisOptions}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Judul/Tema Kegiatan</label>
+        <input type="text" id="upeJudul" value="${esc(r.judul)}">
+      </div>
+      <div class="field">
+        <label>Penyelenggara</label>
+        <input type="text" id="upePenyelenggara" value="${esc(r.penyelenggara||'')}">
+      </div>
+      <div class="field">
+        <label>Pembicara (pisahkan dengan koma jika lebih dari satu)</label>
+        <input type="text" id="upePembicara" value="${esc((r.pembicara||[]).join(', '))}">
+      </div>
+      <div class="field">
+        <label>Catatan Penting</label>
+        <textarea id="upeCatatan">${esc(r.catatan||'')}</textarea>
+      </div>
+      <div class="btnrow">
+        <button class="btn btn-gold btn-sm" onclick="saveEditUpgrading('${r.id}')">Simpan Perubahan</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelEditUpgrading()">Batal</button>
+      </div>
+    </div>
+  `;
+}
+function startEditUpgrading(id){ STATE.upgradingEditingId = id; render(); }
+function cancelEditUpgrading(){ STATE.upgradingEditingId = null; render(); }
+async function saveEditUpgrading(id){
+  const tglMulai = document.getElementById('upeTglMulai').value;
+  const tglSelesai = document.getElementById('upeTglSelesai').value;
+  const jenis = document.getElementById('upeJenis').value;
+  const judul = document.getElementById('upeJudul').value.trim();
+  const penyelenggara = document.getElementById('upePenyelenggara').value.trim();
+  const pembicara = document.getElementById('upePembicara').value.split(',').map(p=>p.trim()).filter(p=>p);
+  const catatan = document.getElementById('upeCatatan').value.trim();
+  if(!tglMulai || !tglSelesai || !jenis || !judul){ toast('Lengkapi semua isian wajib', true); return; }
+  if(tglSelesai < tglMulai){ toast('Akhir pelaksanaan tidak boleh sebelum awal pelaksanaan', true); return; }
+  const okSave = await mutateUpgradingSafely(fresh=>{
+    const target = fresh.find(r=>r.id===id);
+    if(target){ target.tglMulai=tglMulai; target.tglSelesai=tglSelesai; target.jenis=jenis; target.judul=judul; target.penyelenggara=penyelenggara; target.pembicara=pembicara; target.catatan=catatan; }
+  });
+  if(!okSave) return;
+  STATE.upgradingEditingId = null;
+  toast('Perubahan Upgrading Personal BK tersimpan');
+  render();
 }
 function toggleUpgradingExpand(id){
   STATE.upgradingExpandedIds[id] = !STATE.upgradingExpandedIds[id];
@@ -3219,6 +3401,7 @@ function buildAdministrasiRowsHtml(filterKategori){
   records.sort((a,b)=> (b.tgl||'').localeCompare(a.tgl||'') || (b.createdAt-a.createdAt));
   if(!records.length) return `<div class="empty"><div class="big">Belum ada catatan Administrasi BK</div>Gunakan formulir di atas untuk menambahkan.</div>`;
   return records.map(r=>{
+    if(STATE.administrasiEditingId === r.id) return renderAdministrasiEditForm(r);
     const grouped = {};
     r.items.forEach(it=>{
       if(filterKategori && it.catKey!==filterKategori) return;
@@ -3239,11 +3422,88 @@ function buildAdministrasiRowsHtml(filterKategori){
         <div class="rbody">${catBlocks}</div>
         <div class="rmeta"><span>Guru BK: <b>${esc(r.guru||'-')}</b></span></div>
         <div class="ractions">
+          <button class="btn btn-outline btn-sm" onclick="startEditAdministrasi('${r.id}')">Edit</button>
           <button class="btn btn-ghost btn-sm" onclick="deleteAdministrasi('${r.id}')">Hapus catatan ini</button>
         </div>
       </div>
     `;
   }).join('');
+}
+function renderAdministrasiEditForm(r){
+  const checkedMap = {};
+  r.items.forEach(it=>{ checkedMap[it.catKey+'_'+it.itemKey] = it.keterangan || ''; });
+  const rid = r.id;
+  const formCategoriesHtml = ADMINISTRASI_CATEGORIES.map(cat=>`
+    <div class="field">
+      <label>${esc(cat.label)}</label>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+        ${cat.items.map(item=>{
+          const key = cat.key+'_'+item.key;
+          const isChecked = key in checkedMap;
+          const ketVal = checkedMap[key] || '';
+          return `
+          <div>
+            <label style="display:flex;align-items:center;gap:8px;font-weight:500;font-size:13.5px;color:var(--ink);cursor:pointer;">
+              <input type="checkbox" class="adm-edit-check" data-rid="${rid}" data-cat="${cat.key}" data-item="${item.key}" id="admEdit_${rid}_${cat.key}_${item.key}" style="width:16px;height:16px;" ${isChecked?'checked':''}>
+              ${esc(item.label)}${item.required ? ' <span style="color:var(--danger);">*</span>' : ''}
+            </label>
+            ${item.hasKet ? `
+            <div id="admKetWrapEdit_${rid}_${cat.key}_${item.key}" style="display:${isChecked?'block':'none'};margin:6px 0 0 26px;">
+              <input type="text" id="admKetEdit_${rid}_${cat.key}_${item.key}" placeholder="Keterangan (${item.required?'wajib diisi':'opsional'})" value="${esc(ketVal)}">
+            </div>` : ''}
+          </div>
+        `;}).join('')}
+      </div>
+    </div>
+  `).join('');
+  return `
+    <div class="record" style="background:var(--teal-50);">
+      <div class="grid2">
+        <div class="field">
+          <label>Tanggal</label>
+          <input type="date" id="admeTgl_${rid}" value="${esc(r.tgl)}">
+        </div>
+        <div class="field">
+          <label>Guru BK</label>
+          <input type="text" id="admeGuru_${rid}" value="${esc(r.guru||'')}">
+        </div>
+      </div>
+      ${formCategoriesHtml}
+      <div class="btnrow">
+        <button class="btn btn-gold btn-sm" onclick="saveEditAdministrasi('${rid}')">Simpan Perubahan</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelEditAdministrasi()">Batal</button>
+      </div>
+    </div>
+  `;
+}
+function startEditAdministrasi(id){ STATE.administrasiEditingId = id; render(); }
+function cancelEditAdministrasi(){ STATE.administrasiEditingId = null; render(); }
+async function saveEditAdministrasi(rid){
+  const tgl = document.getElementById(`admeTgl_${rid}`).value;
+  const guru = document.getElementById(`admeGuru_${rid}`).value.trim();
+  if(!tgl){ toast('Lengkapi tanggal', true); return; }
+  const items = [];
+  let hasError = false;
+  document.querySelectorAll(`.adm-edit-check[data-rid="${rid}"]`).forEach(cb=>{
+    if(!cb.checked) return;
+    const catKey = cb.dataset.cat, itemKey = cb.dataset.item;
+    const cat = ADMINISTRASI_CATEGORIES.find(c=>c.key===catKey);
+    const item = cat.items.find(it=>it.key===itemKey);
+    const ketInput = document.getElementById(`admKetEdit_${rid}_${catKey}_${itemKey}`);
+    const keterangan = ketInput ? ketInput.value.trim() : '';
+    if(item.required && !keterangan){ hasError = true; }
+    items.push({ catKey, catLabel:cat.label, itemKey, itemLabel:item.label, keterangan });
+  });
+  if(hasError){ toast('Keterangan wajib diisi untuk item "Lainnya"', true); return; }
+  if(!items.length){ toast('Centang minimal satu kegiatan administrasi BK', true); return; }
+  const okSave = await mutateAdministrasiSafely(fresh=>{
+    const target = fresh.find(r=>r.id===rid);
+    if(target){ target.tgl=tgl; target.guru=guru; target.items=items; }
+  });
+  if(!okSave) return;
+  STATE.administrasiEditingId = null;
+  toast('Perubahan Administrasi BK tersimpan');
+  render();
 }
 
 async function deleteAdministrasi(id){
@@ -4426,6 +4686,11 @@ document.addEventListener('change', (e)=>{
   if(e.target.classList && e.target.classList.contains('adm-check')){
     const cat = e.target.dataset.cat, item = e.target.dataset.item;
     const wrap = document.getElementById(`admKetWrap_${cat}_${item}`);
+    if(wrap) wrap.style.display = e.target.checked ? 'block' : 'none';
+  }
+  if(e.target.classList && e.target.classList.contains('adm-edit-check')){
+    const rid = e.target.dataset.rid, cat = e.target.dataset.cat, item = e.target.dataset.item;
+    const wrap = document.getElementById(`admKetWrapEdit_${rid}_${cat}_${item}`);
     if(wrap) wrap.style.display = e.target.checked ? 'block' : 'none';
   }
   if(e.target.classList && e.target.classList.contains('pbk-check')){
