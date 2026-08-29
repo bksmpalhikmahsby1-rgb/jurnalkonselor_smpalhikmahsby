@@ -574,11 +574,63 @@ async function loadStudents(){
 }
 async function saveStudents(){ await sSet('students', DB.students); }
 
+// PENTING: sama seperti Layanan BK/Permasalahan/Personal BK/Settings - daftar siswa adalah
+// SATU KUNCI BERSAMA yang dipakai SEMUA Personal BK. Kalau langsung ditimpa berdasarkan
+// salinan di memori yang mungkin usang, SELURUH daftar siswa bisa hilang (persis kejadian
+// yang ditemukan: kolom students kosong []). Fungsi ini mengambil data TERBARU dulu.
+if(!window.__studentsConfirmedOnce) window.__studentsConfirmedOnce = false;
+async function mutateStudentsSafely(mutatorFn){
+  const fresh = await sGetWithRetry('students');
+  if(fresh && Array.isArray(fresh)){
+    window.__studentsConfirmedOnce = true;
+  } else if(window.__studentsConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.students||[]).map(s=>({...s}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('students', freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.students = freshArray;
+  window.__studentsConfirmedOnce = true;
+  return true;
+}
+
 async function loadLayanan(induk, force){
   if(force || !DB.layanan[induk]) DB.layanan[induk] = (await sGet('layanan_'+induk)) || [];
   return DB.layanan[induk];
 }
 async function saveLayanan(induk){ await sSet('layanan_'+induk, DB.layanan[induk] || []); }
+
+// PENTING: sama seperti mutatePersonalBKSafely/mutateSettingsSafely - setiap perubahan pada
+// Layanan BK seorang siswa TIDAK BOLEH langsung menimpa berdasarkan salinan di memori yang
+// mungkin sudah usang (mis. jika siswa yang sama baru saja diubah dari sesi/perangkat lain,
+// atau ada gangguan jaringan sesaat). Fungsi ini mengambil data TERBARU dari server dulu,
+// menerapkan HANYA perubahan yang dimaksud (lewat mutatorFn), baru menyimpan kembali.
+if(!window.__layananConfirmedIndukSet) window.__layananConfirmedIndukSet = new Set();
+async function mutateLayananSafely(induk, mutatorFn){
+  const fresh = await sGetWithRetry('layanan_'+induk);
+  const sudahTerkonfirmasi = window.__layananConfirmedIndukSet.has(induk);
+  if(fresh && Array.isArray(fresh)){
+    window.__layananConfirmedIndukSet.add(induk);
+  } else if(sudahTerkonfirmasi){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.layanan[induk]||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('layanan_'+induk, freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.layanan[induk] = freshArray;
+  window.__layananConfirmedIndukSet.add(induk);
+  return true;
+}
 
 async function loadKasus(induk, force){
   if(force || !DB.kasus[induk]) DB.kasus[induk] = (await sGet('kasus_'+induk)) || [];
@@ -586,29 +638,124 @@ async function loadKasus(induk, force){
 }
 async function saveKasus(induk){ await sSet('kasus_'+induk, DB.kasus[induk] || []); }
 
+if(!window.__kasusConfirmedIndukSet) window.__kasusConfirmedIndukSet = new Set();
+async function mutateKasusSafely(induk, mutatorFn){
+  const fresh = await sGetWithRetry('kasus_'+induk);
+  const sudahTerkonfirmasi = window.__kasusConfirmedIndukSet.has(induk);
+  if(fresh && Array.isArray(fresh)){
+    window.__kasusConfirmedIndukSet.add(induk);
+  } else if(sudahTerkonfirmasi){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.kasus[induk]||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('kasus_'+induk, freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.kasus[induk] = freshArray;
+  window.__kasusConfirmedIndukSet.add(induk);
+  return true;
+}
+
 async function loadKlasikal(kelas, force){
   if(force || !DB.klasikal[kelas]) DB.klasikal[kelas] = (await sGet('klasikal_'+kelas)) || [];
   return DB.klasikal[kelas];
 }
 async function saveKlasikal(kelas){ await sSet('klasikal_'+kelas, DB.klasikal[kelas] || []); }
+if(!window.__klasikalConfirmedKelasSet) window.__klasikalConfirmedKelasSet = new Set();
+async function mutateKlasikalSafely(kelas, mutatorFn){
+  const fresh = await sGetWithRetry('klasikal_'+kelas);
+  const sudahTerkonfirmasi = window.__klasikalConfirmedKelasSet.has(kelas);
+  if(fresh && Array.isArray(fresh)){
+    window.__klasikalConfirmedKelasSet.add(kelas);
+  } else if(sudahTerkonfirmasi){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.klasikal[kelas]||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('klasikal_'+kelas, freshArray);
+  if(!saveOk){
+    toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  DB.klasikal[kelas] = freshArray;
+  window.__klasikalConfirmedKelasSet.add(kelas);
+  return true;
+}
+
 
 async function loadAdministrasi(force){
   if(force || DB.administrasi === null) DB.administrasi = (await sGet('administrasi')) || [];
   return DB.administrasi;
 }
 async function saveAdministrasi(){ await sSet('administrasi', DB.administrasi || []); }
+if(!window.__administrasiConfirmedOnce) window.__administrasiConfirmedOnce = false;
+async function mutateAdministrasiSafely(mutatorFn){
+  const fresh = await sGetWithRetry('administrasi');
+  if(fresh && Array.isArray(fresh)){ window.__administrasiConfirmedOnce = true; }
+  else if(window.__administrasiConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.administrasi||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('administrasi', freshArray);
+  if(!saveOk){ toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true); return false; }
+  DB.administrasi = freshArray;
+  window.__administrasiConfirmedOnce = true;
+  return true;
+}
+
+async function saveWawancaraWali(){ await sSet('wawancara_wali_7', DB.wawancaraWali || []); }
+if(!window.__wawancaraConfirmedOnce) window.__wawancaraConfirmedOnce = false;
+async function mutateWawancaraWaliSafely(mutatorFn){
+  const fresh = await sGetWithRetry('wawancara_wali_7');
+  if(fresh && Array.isArray(fresh)){ window.__wawancaraConfirmedOnce = true; }
+  else if(window.__wawancaraConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.wawancaraWali||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('wawancara_wali_7', freshArray);
+  if(!saveOk){ toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true); return false; }
+  DB.wawancaraWali = freshArray;
+  window.__wawancaraConfirmedOnce = true;
+  return true;
+}
+
+async function saveHomeVisit(){ await sSet('home_visit', DB.homeVisit || []); }
+if(!window.__homeVisitConfirmedOnce) window.__homeVisitConfirmedOnce = false;
+async function mutateHomeVisitSafely(mutatorFn){
+  const fresh = await sGetWithRetry('home_visit');
+  if(fresh && Array.isArray(fresh)){ window.__homeVisitConfirmedOnce = true; }
+  else if(window.__homeVisitConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.homeVisit||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('home_visit', freshArray);
+  if(!saveOk){ toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true); return false; }
+  DB.homeVisit = freshArray;
+  window.__homeVisitConfirmedOnce = true;
+  return true;
+}
+
 
 async function loadWawancaraWali(force){
   if(force || DB.wawancaraWali === null) DB.wawancaraWali = (await sGet('wawancara_wali_7')) || [];
   return DB.wawancaraWali;
 }
-async function saveWawancaraWali(){ await sSet('wawancara_wali_7', DB.wawancaraWali || []); }
 
 async function loadHomeVisit(force){
   if(force || DB.homeVisit === null) DB.homeVisit = (await sGet('home_visit')) || [];
   return DB.homeVisit;
 }
-async function saveHomeVisit(){ await sSet('home_visit', DB.homeVisit || []); }
 
 async function loadPersonalBK(force){
   if(force || DB.personalBK === null){
@@ -748,7 +895,27 @@ async function updateKelasCapaianManual(kelas, field, value){
 
 async function loadKelasWaliKelas(force){
   if(force || DB.kelasWaliKelas === null){
-    DB.kelasWaliKelas = (await sGet('kelas_wali_kelas')) || {};
+    const stored = await sGet('kelas_wali_kelas');
+    DB.kelasWaliKelas = stored || {};
+    // MIGRASI SATU KALI: sebelum ada penyimpanan terpusat ini, nama Wali Kelas sempat
+    // tersimpan di dalam kelas_capaian_manual[kelas].waliKelas. Kalau data terpusat masih
+    // kosong tapi ada peninggalan lama di sana, pindahkan dulu supaya tidak hilang dari
+    // tampilan hanya karena lokasi penyimpanannya berubah.
+    if(!stored || Object.keys(stored).length === 0){
+      const legacyManual = await sGet('kelas_capaian_manual');
+      if(legacyManual && typeof legacyManual === 'object'){
+        let adaMigrasi = false;
+        const migrated = {};
+        Object.keys(legacyManual).forEach(kelas=>{
+          const namaLama = legacyManual[kelas] && legacyManual[kelas].waliKelas;
+          if(namaLama && namaLama.trim()){ migrated[kelas] = namaLama.trim(); adaMigrasi = true; }
+        });
+        if(adaMigrasi){
+          DB.kelasWaliKelas = migrated;
+          await sSet('kelas_wali_kelas', migrated);
+        }
+      }
+    }
   }
   return DB.kelasWaliKelas;
 }
@@ -803,6 +970,23 @@ async function loadUpgrading(force){
   return DB.upgrading;
 }
 async function saveUpgrading(){ await sSet('upgrading_personal_bk', DB.upgrading || []); }
+if(!window.__upgradingConfirmedOnce) window.__upgradingConfirmedOnce = false;
+async function mutateUpgradingSafely(mutatorFn){
+  const fresh = await sGetWithRetry('upgrading_personal_bk');
+  if(fresh && Array.isArray(fresh)){ window.__upgradingConfirmedOnce = true; }
+  else if(window.__upgradingConfirmedOnce){
+    toast('Gagal menyimpan: tidak bisa memastikan data terbaru dari Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true);
+    return false;
+  }
+  let freshArray = (fresh && Array.isArray(fresh)) ? fresh : (DB.upgrading||[]).map(r=>({...r}));
+  mutatorFn(freshArray);
+  const saveOk = await sSet('upgrading_personal_bk', freshArray);
+  if(!saveOk){ toast('Gagal menyimpan perubahan ke Google Sheets. Periksa koneksi internet Anda dan coba lagi.', true); return false; }
+  DB.upgrading = freshArray;
+  window.__upgradingConfirmedOnce = true;
+  return true;
+}
+
 
 /* ================== UTIL ================== */
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -950,6 +1134,21 @@ const TAHUN_AJARAN_LIST = [];
 })();
 
 function findStudent(induk){ return DB.students.find(s=>s.induk===induk); }
+
+// Peringatan bersama: kalau seorang siswa SUDAH ADA dengan kelas yang BERBEDA dari yang baru
+// dimasukkan, tanyakan dulu sebelum menimpa - karena mengganti kelas siswa bisa membuat seluruh
+// catatan Layanan BK/Permasalahannya yang SUDAH ADA jadi tidak terlihat lagi oleh Personal BK
+// yang tidak ditugaskan ke kelas barunya (meski datanya sendiri tidak hilang dari Google Sheets).
+async function confirmKelasChangeIfNeeded(induk, newNama, newKelas){
+  const existing = findStudent(induk);
+  if(!existing) return true; // siswa baru, tidak ada yang perlu dikonfirmasi
+  if(existing.kelas === newKelas) return true; // kelas sama, aman
+  return await confirmModal(
+    '⚠ Kelas Siswa Akan Berubah',
+    `Nomor Induk <b>${esc(induk)}</b> sudah tercatat sebagai <b>${esc(existing.nama)}</b> di kelas <b>${esc(existing.kelas)}</b>. Kalau dilanjutkan, kelasnya akan berubah menjadi <b>${esc(newKelas)}</b> (${esc(newNama)}), dan seluruh catatan Layanan BK/Permasalahan yang sudah ada untuk siswa ini bisa jadi <b>tidak terlihat lagi</b> di daftar Personal BK yang tidak ditugaskan ke kelas baru tersebut — meski datanya tetap tersimpan aman. Pastikan ini memang perubahan kelas yang disengaja (mis. kenaikan kelas), bukan salah pilih. Lanjutkan?`,
+    'Ya, Lanjutkan', true
+  );
+}
 
 /* ================== NAV ================== */
 document.addEventListener('DOMContentLoaded', init);
@@ -1811,8 +2010,8 @@ async function handleImportSiswaFile(){
 
 async function processImportSiswaRows(aoa){
   const assigned = assignedKelasList();
-  let added = 0, updated = 0;
   const skipped = [];
+  const validRows = [];
   for(let i=1; i<aoa.length; i++){
     const row = aoa[i] || [];
     const induk = String(row[0]||'').trim();
@@ -1822,11 +2021,19 @@ async function processImportSiswaRows(aoa){
     if(!/^\d{4}$/.test(induk)){ skipped.push(`Baris ${i+1}: Nomor Induk "${esc(induk)||'(kosong)'}" tidak valid (wajib 4 angka)`); continue; }
     if(!nama){ skipped.push(`Baris ${i+1}: Nama Siswa kosong (Induk ${esc(induk)})`); continue; }
     if(!assigned.includes(kelas)){ skipped.push(`Baris ${i+1}: Kelas "${esc(kelas)||'(kosong)'}" bukan kelas yang ditugaskan ke Anda (Induk ${esc(induk)})`); continue; }
-    const existing = findStudent(induk);
-    if(existing){ existing.nama = nama; existing.kelas = kelas; updated++; }
-    else { DB.students.push({ induk, nama, kelas }); added++; }
+    validRows.push({ induk, nama, kelas });
   }
-  if(added || updated) await saveStudents();
+  let added = 0, updated = 0;
+  if(validRows.length){
+    const okSave = await mutateStudentsSafely(fresh=>{
+      for(const row of validRows){
+        const existing = fresh.find(x=>x.induk===row.induk);
+        if(existing){ existing.nama = row.nama; existing.kelas = row.kelas; updated++; }
+        else { fresh.push(row); added++; }
+      }
+    });
+    if(!okSave){ render(); return; }
+  }
   STATE.importSiswaResult = { added, updated, skipped };
   if(added || updated){
     toast(`Import selesai: ${added} siswa baru, ${updated} diperbarui`);
@@ -2081,17 +2288,18 @@ async function saveEditStudent(oldInduk){
   }
 
   // Sinkronkan catatan Home Visit yang merujuk siswa ini (menyimpan salinan nama/kelas)
-  await loadHomeVisit();
-  let hvChanged = false;
-  (DB.homeVisit||[]).forEach(r=>{
-    if(r.induk === oldInduk){
-      r.induk = newInduk; r.nama = nama; r.kelas = kelas;
-      hvChanged = true;
-    }
+  await mutateHomeVisitSafely(fresh=>{
+    fresh.forEach(r=>{
+      if(r.induk === oldInduk){ r.induk = newInduk; r.nama = nama; r.kelas = kelas; }
+    });
   });
-  if(hvChanged) await saveHomeVisit();
 
-  await saveStudents();
+  const okSave = await mutateStudentsSafely(fresh=>{
+    const target = fresh.find(x=>x.induk===oldInduk);
+    if(target){ target.induk = newInduk; target.nama = nama; target.kelas = kelas; }
+    else fresh.push({ induk:newInduk, nama, kelas });
+  });
+  if(!okSave) return;
   STATE.editingStudentInduk = null;
   toast('Data siswa berhasil diperbarui');
   render();
@@ -2447,12 +2655,20 @@ async function submitKelompok(){
   const invalidInduk = members.find(m => !/^\d{4}$/.test(m.induk));
   if(invalidInduk){ toast(`Nomor Induk "${invalidInduk.induk}" tidak valid — wajib 4 angka`, true); return; }
   for(const m of members){
-    let s = findStudent(m.induk);
-    if(!s){ s = {induk:m.induk, nama:m.nama, kelas:m.kelas}; DB.students.push(s); }
-    else { s.nama = m.nama; s.kelas = m.kelas; }
+    const konfirmasiKelas = await confirmKelasChangeIfNeeded(m.induk, m.nama, m.kelas);
+    if(!konfirmasiKelas) return;
+  }
+  const okSave = await mutateStudentsSafely(fresh=>{
+    for(const m of members){
+      const target = fresh.find(x=>x.induk===m.induk);
+      if(target){ target.nama = m.nama; target.kelas = m.kelas; }
+      else fresh.push({induk:m.induk, nama:m.nama, kelas:m.kelas});
+    }
+  });
+  if(!okSave) return;
+  for(const m of members){
     await loadLayanan(m.induk); await loadKasus(m.induk);
   }
-  await saveStudents();
   STATE.currentKelompokMembers = members;
   STATE.kelompokMembers = [{induk:'',nama:'',kelas:''},{induk:'',nama:'',kelas:''}];
   STATE.view = 'kelompok';
@@ -2614,21 +2830,24 @@ async function saveEditKlasikal(oldKelas, id){
   const guru = document.getElementById('keGuru').value.trim();
   if(!tgl || !newKelas || !jamKe || !pertemuanKe || !materi){ toast('Lengkapi semua isian', true); return; }
 
-  await loadKlasikal(oldKelas);
-  const idx = DB.klasikal[oldKelas].findIndex(x=>x.id===id);
-  if(idx<0){ toast('Catatan tidak ditemukan', true); return; }
-  const updated = Object.assign({}, DB.klasikal[oldKelas][idx], {tgl, jamKe, pertemuanKe, materi, guru});
+  const existing = (DB.klasikal[oldKelas]||[]).find(x=>x.id===id);
+  if(!existing){ toast('Catatan tidak ditemukan', true); return; }
+  const updated = Object.assign({}, existing, {tgl, jamKe, pertemuanKe, materi, guru});
 
   if(newKelas !== oldKelas){
-    DB.klasikal[oldKelas].splice(idx,1);
-    await saveKlasikal(oldKelas);
-    await loadKlasikal(newKelas);
-    DB.klasikal[newKelas] = DB.klasikal[newKelas] || [];
-    DB.klasikal[newKelas].push(updated);
-    await saveKlasikal(newKelas);
+    const okOld = await mutateKlasikalSafely(oldKelas, fresh=>{
+      const idx = fresh.findIndex(x=>x.id===id);
+      if(idx!==-1) fresh.splice(idx,1);
+    });
+    if(!okOld) return;
+    const okNew = await mutateKlasikalSafely(newKelas, fresh=>{ fresh.push(updated); });
+    if(!okNew) return;
   } else {
-    DB.klasikal[oldKelas][idx] = updated;
-    await saveKlasikal(oldKelas);
+    const okSave = await mutateKlasikalSafely(oldKelas, fresh=>{
+      const idx = fresh.findIndex(x=>x.id===id);
+      if(idx!==-1) fresh[idx] = updated;
+    });
+    if(!okSave) return;
   }
   await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
   STATE.klasikalEditingId = null;
@@ -2639,8 +2858,11 @@ async function saveEditKlasikal(oldKelas, id){
 async function deleteKlasikal(kelas, id){
   const ok = await confirmModal('Hapus Catatan Layanan Klasikal', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.klasikal[kelas] = (DB.klasikal[kelas]||[]).filter(r=>r.id!==id);
-  await saveKlasikal(kelas);
+  const okSave = await mutateKlasikalSafely(kelas, fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   if(STATE.klasikalEditingId===id) STATE.klasikalEditingId = null;
   delete STATE.klasikalExpandedIds[id];
   toast('Catatan Layanan Klasikal dihapus');
@@ -2685,8 +2907,11 @@ function closeAllWawancara(){
 async function deleteWawancaraWali(id){
   const ok = await confirmModal('Hapus Catatan Wawancara', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.wawancaraWali = (DB.wawancaraWali||[]).filter(r=>r.id!==id);
-  await saveWawancaraWali();
+  const okSave = await mutateWawancaraWaliSafely(fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   toast('Catatan Wawancara Wali Murid dihapus');
   render();
 }
@@ -2726,8 +2951,11 @@ function closeAllHomeVisit(){
 async function deleteHomeVisit(id){
   const ok = await confirmModal('Hapus Catatan Home Visit', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.homeVisit = (DB.homeVisit||[]).filter(r=>r.id!==id);
-  await saveHomeVisit();
+  const okSave = await mutateHomeVisitSafely(fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   toast('Catatan Home Visit dihapus');
   render();
 }
@@ -2961,8 +3189,11 @@ function collapseAllUpgrading(){
 async function deleteUpgrading(id){
   const ok = await confirmModal('Hapus Catatan Upgrading', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.upgrading = (DB.upgrading||[]).filter(r=>r.id!==id);
-  await saveUpgrading();
+  const okSave = await mutateUpgradingSafely(fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   toast('Catatan Upgrading Personal BK dihapus');
   render();
 }
@@ -3003,8 +3234,11 @@ function buildAdministrasiRowsHtml(filterKategori){
 async function deleteAdministrasi(id){
   const ok = await confirmModal('Hapus Catatan Administrasi BK', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.administrasi = (DB.administrasi||[]).filter(r=>r.id!==id);
-  await saveAdministrasi();
+  const okSave = await mutateAdministrasiSafely(fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   toast('Catatan Administrasi BK dihapus');
   render();
 }
@@ -3215,14 +3449,14 @@ function bindGlobalHandlers(){
       const kelas = document.getElementById('fKelas').value;
       if(!induk || !nama || !kelas){ toast('Lengkapi semua isian identitas', true); return; }
       if(!/^\d{4}$/.test(induk)){ toast('Nomor Induk wajib 4 angka', true); return; }
-      let s = findStudent(induk);
-      if(!s){
-        s = {induk, nama, kelas};
-        DB.students.push(s);
-      } else {
-        s.nama = nama; s.kelas = kelas;
-      }
-      await saveStudents();
+      const konfirmasiKelas = await confirmKelasChangeIfNeeded(induk, nama, kelas);
+      if(!konfirmasiKelas) return;
+      const okSave = await mutateStudentsSafely(fresh=>{
+        const target = fresh.find(x=>x.induk===induk);
+        if(target){ target.nama = nama; target.kelas = kelas; }
+        else fresh.push({induk, nama, kelas});
+      });
+      if(!okSave) return;
       await loadLayanan(induk); await loadKasus(induk);
       toast('Identitas siswa disimpan');
       document.getElementById('afterSaveBox').innerHTML = `
@@ -3271,9 +3505,8 @@ function bindGlobalHandlers(){
         createdAt: Date.now()
       };
       if(!kelas || !rec.tgl || !rec.jamKe || !rec.pertemuanKe || !rec.materi){ toast('Lengkapi semua isian Layanan Klasikal', true); return; }
-      await loadKlasikal(kelas);
-      DB.klasikal[kelas].push(rec);
-      await saveKlasikal(kelas);
+      const okSave = await mutateKlasikalSafely(kelas, fresh=>{ fresh.push(rec); });
+      if(!okSave) return;
       await mutateSettingsSafely(fresh=>{ fresh.lastGuru = rec.guru; });
       toast('Layanan Klasikal BK tersimpan');
       render();
@@ -3294,8 +3527,11 @@ async function handleDeleteStudent(induk){
   if(!s) return;
   const ok = await confirmModal('Hapus Data Siswa', `Semua data <b>${esc(s.nama)}</b> (Layanan BK &amp; Permasalahan) akan dihapus permanen. Lanjutkan?`, 'Hapus', true);
   if(!ok) return;
-  DB.students = DB.students.filter(x=>x.induk!==induk);
-  await saveStudents();
+  const okSave = await mutateStudentsSafely(fresh=>{
+    const idx = fresh.findIndex(x=>x.induk===induk);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   await sDel('layanan_'+induk);
   await sDel('kasus_'+induk);
   delete DB.layanan[induk]; delete DB.kasus[induk];
@@ -3481,11 +3717,15 @@ async function hapusSesiKelompok(){
     'HAPUS'
   );
   if(!ok) return;
+  let semuaBerhasil = true;
   for(const m of saved.members){
-    await loadLayanan(m.induk);
-    DB.layanan[m.induk] = (DB.layanan[m.induk]||[]).filter(r => r.kelompokId !== saved.kelompokId);
-    await saveLayanan(m.induk);
+    const okSave = await mutateLayananSafely(m.induk, fresh=>{
+      const idx = fresh.findIndex(r => r.kelompokId === saved.kelompokId);
+      if(idx!==-1) fresh.splice(idx,1);
+    });
+    if(!okSave) semuaBerhasil = false;
   }
+  if(!semuaBerhasil) return;
   await logActivity(`Menghapus sesi Layanan BK Kelompok (${esc(saved.jenis)}, ${fmtDateID(saved.tgl)}) untuk ${saved.members.length} siswa`);
   toast('Sesi Layanan BK Kelompok dihapus');
   STATE.lastKelompokSession = null;
@@ -3644,8 +3884,11 @@ async function saveEditLayanan(induk, id){
   const guru = document.getElementById('leGuru').value.trim();
   const hasil = document.getElementById('leHasil').value.trim();
   if(!tgl || !jenis || !bidang || !hasil){ toast('Lengkapi semua isian', true); return; }
-  rec.tgl = tgl; rec.jenis = jenis; rec.bidang = bidang; rec.guru = guru; rec.hasil = hasil;
-  await saveLayanan(induk);
+  const okSave = await mutateLayananSafely(induk, fresh=>{
+    const target = fresh.find(r=>r.id===rec.id);
+    if(target){ target.tgl=tgl; target.jenis=jenis; target.bidang=bidang; target.guru=guru; target.hasil=hasil; }
+  });
+  if(!okSave) return;
   await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
   STATE.layananEditingId = null;
   toast('Perubahan Layanan BK tersimpan');
@@ -3836,8 +4079,11 @@ async function saveEditKasus(induk, id){
   const penanganan = document.getElementById('kePenanganan').value.trim();
   const kolaborasi = document.getElementById('keKolaborasi').value.trim();
   if(!tgl || !namaKasus || !bidang || !kronologis || !penanganan){ toast('Lengkapi semua isian', true); return; }
-  rec.tgl = tgl; rec.namaKasus = namaKasus; rec.bidang = bidang; rec.kronologis = kronologis; rec.penanganan = penanganan; rec.kolaborasi = kolaborasi;
-  await saveKasus(induk);
+  const okSave = await mutateKasusSafely(induk, fresh=>{
+    const target = fresh.find(r=>r.id===id);
+    if(target){ target.tgl=tgl; target.namaKasus=namaKasus; target.bidang=bidang; target.kronologis=kronologis; target.penanganan=penanganan; target.kolaborasi=kolaborasi; }
+  });
+  if(!okSave) return;
   STATE.kasusEditingId = null;
   toast('Perubahan Permasalahan Siswa tersimpan');
   render();
@@ -3857,12 +4103,15 @@ document.addEventListener('submit', async (e)=>{
     if(!tgl || !jenis || !bidang || !hasil){ toast('Lengkapi semua isian layanan BK kelompok', true); return; }
     if(STATE.kelompokEditMode && STATE.lastKelompokSession){
       const kelompokId = STATE.lastKelompokSession.kelompokId;
+      let semuaBerhasil = true;
       for(const m of STATE.lastKelompokSession.members){
-        await loadLayanan(m.induk);
-        const rec = (DB.layanan[m.induk]||[]).find(r=>r.kelompokId===kelompokId);
-        if(rec){ rec.tgl=tgl; rec.jenis=jenis; rec.bidang=bidang; rec.guru=guru; rec.hasil=hasil; }
-        await saveLayanan(m.induk);
+        const okSave = await mutateLayananSafely(m.induk, fresh=>{
+          const target = fresh.find(r=>r.kelompokId===kelompokId);
+          if(target){ target.tgl=tgl; target.jenis=jenis; target.bidang=bidang; target.guru=guru; target.hasil=hasil; }
+        });
+        if(!okSave) semuaBerhasil = false;
       }
+      if(!semuaBerhasil) return;
       await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
       toast(`Perubahan sesi Layanan BK Kelompok tersimpan`);
       STATE.lastKelompokSession = { ...STATE.lastKelompokSession, tgl, jenis, bidang, guru, hasil };
@@ -3871,13 +4120,13 @@ document.addEventListener('submit', async (e)=>{
       return;
     }
     const kelompokId = uid();
+    let semuaBerhasil = true;
     for(const m of members){
-      await loadLayanan(m.induk);
       const rec = { id: uid(), tgl, jenis, bidang, guru, hasil, createdAt: Date.now(), kelompokId, anggotaKelompok: members };
-      DB.layanan[m.induk] = DB.layanan[m.induk] || [];
-      DB.layanan[m.induk].push(rec);
-      await saveLayanan(m.induk);
+      const okSave = await mutateLayananSafely(m.induk, fresh=>{ fresh.push(rec); });
+      if(!okSave) semuaBerhasil = false;
     }
+    if(!semuaBerhasil) return;
     await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
     toast(`Layanan BK kelompok tersimpan untuk ${members.length} siswa`);
     STATE.lastKelompokSession = { kelompokId, tgl, jenis, bidang, guru, hasil, members };
@@ -3902,9 +4151,8 @@ document.addEventListener('submit', async (e)=>{
       createdAt: Date.now()
     };
     if(!rec.tgl || !rec.jenis || !rec.bidang || !rec.hasil){ toast('Lengkapi semua isian layanan BK', true); return; }
-    DB.layanan[induk] = DB.layanan[induk] || [];
-    DB.layanan[induk].push(rec);
-    await saveLayanan(induk);
+    const okSave = await mutateLayananSafely(induk, fresh=>{ fresh.push(rec); });
+    if(!okSave) return;
     await mutateSettingsSafely(fresh=>{ fresh.lastGuru = rec.guru; });
     toast('Layanan BK tersimpan');
     render();
@@ -3929,9 +4177,8 @@ document.addEventListener('submit', async (e)=>{
       createdAt: Date.now()
     };
     if(!rec.tgl || !rec.namaKasus || !rec.bidang || !rec.kronologis || !rec.penanganan){ toast('Lengkapi semua isian permasalahan siswa', true); return; }
-    DB.kasus[induk] = DB.kasus[induk] || [];
-    DB.kasus[induk].push(rec);
-    await saveKasus(induk);
+    const okSave = await mutateKasusSafely(induk, fresh=>{ fresh.push(rec); });
+    if(!okSave) return;
     toast('Permasalahan siswa tersimpan');
     render();
   }
@@ -3953,9 +4200,8 @@ document.addEventListener('submit', async (e)=>{
     if(Number(rec.terlayani) > Number(rec.terjadwal)){
       toast('Jumlah yang terlayani tidak boleh lebih besar dari jumlah terjadwal', true); return;
     }
-    await loadWawancaraWali();
-    DB.wawancaraWali.push(rec);
-    await saveWawancaraWali();
+    const okSave = await mutateWawancaraWaliSafely(fresh=>{ fresh.push(rec); });
+    if(!okSave) return;
     toast('Wawancara Wali Murid Kelas 7 tersimpan');
     render();
   }
@@ -3973,14 +4219,17 @@ document.addEventListener('submit', async (e)=>{
     };
     if(!rec.tgl || !rec.induk || !rec.nama || !rec.kelas){ toast('Lengkapi tanggal, nomor induk, nama siswa, dan kelas', true); return; }
     if(!/^\d{4}$/.test(rec.induk)){ toast('Nomor Induk wajib 4 angka', true); return; }
-    let s = findStudent(rec.induk);
-    if(!s){ s = {induk:rec.induk, nama:rec.nama, kelas:rec.kelas}; DB.students.push(s); }
-    else { s.nama = rec.nama; s.kelas = rec.kelas; }
-    await saveStudents();
+    const konfirmasiKelasHv = await confirmKelasChangeIfNeeded(rec.induk, rec.nama, rec.kelas);
+    if(!konfirmasiKelasHv) return;
+    const okSaveStudent = await mutateStudentsSafely(fresh=>{
+      const target = fresh.find(x=>x.induk===rec.induk);
+      if(target){ target.nama = rec.nama; target.kelas = rec.kelas; }
+      else fresh.push({induk:rec.induk, nama:rec.nama, kelas:rec.kelas});
+    });
+    if(!okSaveStudent) return;
     await loadLayanan(rec.induk); await loadKasus(rec.induk);
-    await loadHomeVisit();
-    DB.homeVisit.push(rec);
-    await saveHomeVisit();
+    const okSave = await mutateHomeVisitSafely(fresh=>{ fresh.push(rec); });
+    if(!okSave) return;
     toast('Home Visit tersimpan');
     render();
   }
@@ -3995,9 +4244,9 @@ document.addEventListener('submit', async (e)=>{
     const pembicara = STATE.upgradingPembicara.map(p=>p.trim()).filter(p=>p);
     if(!tglMulai || !tglSelesai || !jenis || !judul){ toast('Lengkapi awal pelaksanaan, akhir pelaksanaan, jenis kegiatan, dan judul/tema kegiatan', true); return; }
     if(tglSelesai < tglMulai){ toast('Akhir pelaksanaan tidak boleh sebelum awal pelaksanaan', true); return; }
-    await loadUpgrading();
-    DB.upgrading.push({ id: uid(), tglMulai, tglSelesai, jenis, judul, penyelenggara, catatan, pembicara, guru: (activePersonalBK()||{}).nama || DB.settings.lastGuru || '', createdAt: Date.now() });
-    await saveUpgrading();
+    const rec = { id: uid(), tglMulai, tglSelesai, jenis, judul, penyelenggara, catatan, pembicara, guru: (activePersonalBK()||{}).nama || DB.settings.lastGuru || '', createdAt: Date.now() };
+    const okSave = await mutateUpgradingSafely(fresh=>{ fresh.push(rec); });
+    if(!okSave) return;
     STATE.upgradingPembicara = [''];
     toast('Upgrading Personal BK tersimpan');
     render();
@@ -4025,9 +4274,9 @@ document.addEventListener('submit', async (e)=>{
     });
     if(hasError){ toast('Keterangan wajib diisi untuk item "Lainnya"', true); return; }
     if(!items.length){ toast('Centang minimal satu kegiatan administrasi BK', true); return; }
-    await loadAdministrasi();
-    DB.administrasi.push({ id: uid(), tgl, guru, items, createdAt: Date.now() });
-    await saveAdministrasi();
+    const recAdm = { id: uid(), tgl, guru, items, createdAt: Date.now() };
+    const okSave = await mutateAdministrasiSafely(fresh=>{ fresh.push(recAdm); });
+    if(!okSave) return;
     await mutateSettingsSafely(fresh=>{ fresh.lastGuru = guru; });
     toast('Administrasi BK tersimpan');
     render();
@@ -4109,8 +4358,11 @@ document.addEventListener('change', (e)=>{
 async function deleteLayanan(induk, id){
   const ok = await confirmModal('Hapus Catatan Layanan BK', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.layanan[induk] = (DB.layanan[induk]||[]).filter(r=>r.id!==id);
-  await saveLayanan(induk);
+  const okSave = await mutateLayananSafely(induk, fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   if(STATE.layananEditingId===id) STATE.layananEditingId = null;
   toast('Catatan layanan BK dihapus');
   render();
@@ -4118,8 +4370,11 @@ async function deleteLayanan(induk, id){
 async function deleteKasus(induk, id){
   const ok = await confirmModal('Hapus Catatan Permasalahan', 'Catatan ini akan dihapus permanen. Lanjutkan?', 'Hapus', true);
   if(!ok) return;
-  DB.kasus[induk] = (DB.kasus[induk]||[]).filter(r=>r.id!==id);
-  await saveKasus(induk);
+  const okSave = await mutateKasusSafely(induk, fresh=>{
+    const idx = fresh.findIndex(r=>r.id===id);
+    if(idx!==-1) fresh.splice(idx,1);
+  });
+  if(!okSave) return;
   if(STATE.kasusEditingId===id) STATE.kasusEditingId = null;
   toast('Catatan permasalahan dihapus');
   render();
@@ -4997,12 +5252,14 @@ async function claimUnattributedRecords(){
     'Ya, Tetapkan ke Saya', true
   );
   if(!ok) return;
-  await loadWawancaraWali();
-  await loadUpgrading();
-  DB.wawancaraWali.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = active.nama; });
-  DB.upgrading.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = active.nama; });
-  await saveWawancaraWali();
-  await saveUpgrading();
+  const namaAktif = active.nama;
+  const okWW = await mutateWawancaraWaliSafely(fresh=>{
+    fresh.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = namaAktif; });
+  });
+  const okUP = await mutateUpgradingSafely(fresh=>{
+    fresh.forEach(r=>{ if(!(r.guru||'').trim()) r.guru = namaAktif; });
+  });
+  if(!okWW || !okUP) return;
   await logActivity(`Menetapkan ${totalBelum} catatan lama (Wawancara/Upgrading) sebagai milik ${esc(active.nama)}`);
   toast(`${totalBelum} catatan lama ditetapkan sebagai milik ${active.nama}`);
   render();
@@ -5276,6 +5533,18 @@ async function renderPengontrolSistemKataSandi(){
 
     <div class="card">
       ${buildKelasWaliKelasPanelHtml()}
+    </div>
+
+    <div class="card">
+      <h2>&#128203; Panduan Pergantian Tahun Ajaran</h2>
+      <p class="hint" style="margin-top:-6px;margin-bottom:14px;">Kalau ada perubahan tugas Personal BK (siswa naik kelas, staf baru masuk/keluar, dsb.), disarankan mengikuti urutan berikut sebelum menekan "Mulai Tahun Ajaran Baru" di bawah ini.</p>
+      <ol style="margin:0;padding-left:22px;line-height:1.9;">
+        <li><b>Cek &amp; perbarui kelas tugas tiap Personal BK</b> — siswa naik kelas biasanya berarti kelas tugas lama (mis. 7A-7E) perlu diubah ke kelas baru (mis. 8A-8E), lewat tombol "Edit Kelas &amp; Siswa" pada setiap Personal BK di bawah.</li>
+        <li><b>Tambah / Hapus Personal BK</b> — kalau ada staf baru masuk atau staf lama sudah tidak bertugas lagi.</li>
+        <li><b>Tinjau ulang peran Admin BK &amp; Kanit BK</b> — pastikan masih sesuai dengan susunan staf yang baru, ganti kalau diperlukan.</li>
+        <li><b>Reset kata sandi</b> untuk Personal BK yang tugasnya berubah signifikan — opsional, tapi disarankan demi keamanan.</li>
+        <li>Setelah keempat langkah di atas selesai, baru lakukan <b>"Mulai Tahun Ajaran Baru"</b> di kartu "Arsip Tahun Ajaran" di bawah ini — supaya data lama terkunci rapi sebelum tahun ajaran baru dimulai dengan susunan Personal BK yang sudah diperbarui.</li>
+      </ol>
     </div>
 
     <div class="card" style="border:1.5px solid var(--gold-500);background:var(--gold-100);">
